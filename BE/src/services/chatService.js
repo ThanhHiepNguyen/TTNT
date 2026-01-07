@@ -27,7 +27,8 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
             throw new Error("Không nhận được phản hồi hợp lệ từ AI service");
         }
 
-        return response.data.data.response;
+
+        return response.data.data;
     } catch (error) {
         console.error("Error generating chat response:", error);
         console.error("Error code:", error.code);
