@@ -17,9 +17,7 @@ export const chat = async (req, res) => {
     const history = conversationHistory || [];
     const aiResponse = await generateChatResponse(userMessage, history);
 
-    return sendResponse(res, 200, "Gửi tin nhắn thành công", {
-      response: aiResponse,
-    });
+    return sendResponse(res, 200, "Gửi tin nhắn thành công", aiResponse);
   } catch (error) {
     console.error("Error in chat controller:", error);
     console.error("Error details:", {

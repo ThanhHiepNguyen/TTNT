@@ -19,14 +19,15 @@ def should_search_products(message: str) -> bool:
         "sản phẩm", "điện thoại", "phone", "iphone", "samsung", "xiaomi", "oppo", "vivo",
         "giá", "giá bao nhiêu", "tồn kho", "còn hàng", "hết hàng", "mua", "bán",
         "tìm", "có", "nào", "loại", "dòng", "mẫu", "model", "shop", "cửa hàng",
-        "triệu", "tr", "nghìn", "k", "vnd", "đồng", "sp", "hàng", "giới thiệu", "tư vấn"
+        "triệu", "tr", "nghìn", "k", "vnd", "đồng", "sp", "hàng", "giới thiệu", "tư vấn",
+        "galaxy", "pixel", "google"
     ]
     
     return any(keyword in lower_message for keyword in keywords)
 
 def extract_search_term(message: str) -> str:
     lower_message = message.lower().strip()
-    brand_keywords = ["iphone", "samsung", "xiaomi", "oppo", "vivo", "realme", "oneplus", "nokia", "huawei"]
+    brand_keywords = ["iphone", "samsung", "xiaomi", "oppo", "vivo", "realme", "oneplus", "nokia", "huawei", "galaxy", "pixel", "google"]
     
     for brand in brand_keywords:
         if brand in lower_message:
@@ -54,7 +55,14 @@ async def get_products_from_backend(backend_url: str, search_term: str = "") -> 
             )
             if response.status_code == 200:
                 data = response.json()
-                return data.get("data", {}).get("products", [])
+                # Hỗ trợ cả hai format: {data: {products: [...]}} và {products: [...]}
+                products = (
+                    data.get("data", {}).get("products")
+                    if isinstance(data, dict) else None
+                )
+                if not products and isinstance(data, dict):
+                    products = data.get("products")
+                return products or []
             return []
     except Exception as e:
         print(f"[RAG] Error fetching products: {e}")
@@ -73,7 +81,13 @@ async def get_reviews_from_backend(backend_url: str, keywords: List[str]) -> Lis
             )
             if response.status_code == 200:
                 data = response.json()
-                reviews = data.get("data", {}).get("reviews", [])
+                # Hỗ trợ cả hai format: {data: {reviews: [...]}} và {reviews: [...]}
+                reviews = (
+                    data.get("data", {}).get("reviews")
+                    if isinstance(data, dict) else None
+                )
+                if not reviews and isinstance(data, dict):
+                    reviews = data.get("reviews")
                 return reviews[:5]
             return []
     except Exception as e:

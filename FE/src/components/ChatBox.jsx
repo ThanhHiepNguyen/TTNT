@@ -1,6 +1,50 @@
 import { useState, useRef, useEffect } from "react";
 import { chatService } from "../api/services/chatService.js";
 
+const ProductCard = ({ product }) => {
+  if (!product) return null;
+  const price = product.price || product.salePrice || product.minPrice || product.maxPrice;
+  const image =
+    product.thumbnail ||
+    product.image ||
+    product.cheapestOptionImage ||
+    product?.options?.[0]?.image ||
+    "https://via.placeholder.com/300";
+
+  return (
+    <a
+      href={`/products/${product.productId}`}
+      className="block bg-white border border-gray-200 rounded-xl p-3 shadow-sm hover:shadow-lg hover:border-blue-400 transition-all duration-200"
+    >
+      <div className="flex gap-3 items-center">
+        <img
+          src={image}
+          alt={product.name}
+          className="w-16 h-16 object-contain rounded-lg bg-gray-50"
+          onError={(e) => {
+            e.target.src = "https://via.placeholder.com/300";
+          }}
+        />
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm text-gray-900 line-clamp-2">{product.name}</p>
+          {price ? (
+            <p className="text-xs text-blue-600 font-semibold mt-1">
+              {price.toLocaleString("vi-VN")} VNĐ
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 mt-1">Chưa có giá</p>
+          )}
+          {product.stockQuantity !== undefined && (
+            <p className="text-[11px] text-gray-500 mt-1">
+              {product.stockQuantity > 0 ? `Còn ${product.stockQuantity} sản phẩm` : "Hết hàng"}
+            </p>
+          )}
+        </div>
+      </div>
+    </a>
+  );
+};
+
 const ChatBox = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
@@ -56,6 +100,7 @@ const ChatBox = () => {
           {
             role: "assistant",
             content: response.response,
+            products: response.products || [],
           },
         ]);
       } else {
@@ -171,6 +216,17 @@ const ChatBox = () => {
                   <p className="text-sm whitespace-pre-wrap break-words">
                     {message.content}
                   </p>
+
+                  {message.role === "assistant" && message.products && message.products.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      <p className="text-xs text-gray-500 font-semibold">Sản phẩm gợi ý:</p>
+                      <div className="space-y-2">
+                        {message.products.map((p, idx) => (
+                          <ProductCard key={`${p.productId || idx}`} product={p} />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
