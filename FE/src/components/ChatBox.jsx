@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { chatService } from "../api/services/chatService.js";
+import VoiceChat from "./VoiceChat"; // Import VoiceChat
 
 const ProductCard = ({ product }) => {
   if (!product) return null;
@@ -71,11 +72,15 @@ const ChatBox = () => {
     }
   }, [messages, isOpen]);
 
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!inputMessage.trim() || isLoading) return;
+  // SỬA HÀM handleSendMessage để nhận cả text từ Mic
+  const handleSendMessage = async (eOrText) => {
+    if (eOrText?.preventDefault) eOrText.preventDefault();
+    
+    // Nếu tham số là string thì lấy luôn (từ Mic), nếu không thì lấy từ inputMessage (từ bàn phím)
+    const userMessage = typeof eOrText === 'string' ? eOrText : inputMessage.trim();
 
-    const userMessage = inputMessage.trim();
+    if (!userMessage || isLoading) return;
+
     setInputMessage("");
 
     const newUserMessage = {
@@ -90,7 +95,6 @@ const ChatBox = () => {
         role: msg.role,
         content: msg.content,
       }));
-
 
       const response = await chatService.sendMessage(userMessage, conversationHistory);
 
@@ -132,6 +136,11 @@ const ChatBox = () => {
       handleSendMessage(e);
     }
   };
+
+  // LẤY CÂU TRẢ LỜI CUỐI CÙNG CỦA AI ĐỂ TRUYỀN VÀO NÚT LOA
+  const lastAiMessage = messages[messages.length - 1]?.role === "assistant" 
+    ? messages[messages.length - 1].content 
+    : null;
 
   return (
     <>
@@ -256,7 +265,7 @@ const ChatBox = () => {
             onSubmit={handleSendMessage}
             className="p-4 bg-white border-t border-gray-200 rounded-b-2xl"
           >
-            <div className="flex gap-2">
+            <div className="flex gap-2 items-center"> {/* Thêm items-center để cân đối */}
               <input
                 ref={inputRef}
                 type="text"
@@ -265,12 +274,19 @@ const ChatBox = () => {
                 onKeyPress={handleKeyPress}
                 placeholder="Nhập tin nhắn..."
                 disabled={isLoading}
-                className="flex-1 px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
               />
+
+              {/* TÍCH HỢP VOICE CHAT VỚI 2 NÚT TÁCH BIỆT */}
+              <VoiceChat 
+                onSendMessage={handleSendMessage} 
+                aiResponse={lastAiMessage} 
+              />
+
               <button
                 type="submit"
                 disabled={!inputMessage.trim() || isLoading}
-                className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center"
+                className="bg-blue-600 text-white p-2 w-10 h-10 rounded-xl hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center shrink-0"
                 aria-label="Gửi tin nhắn"
               >
                 {isLoading ? (
@@ -318,4 +334,3 @@ const ChatBox = () => {
 };
 
 export default ChatBox;
-
