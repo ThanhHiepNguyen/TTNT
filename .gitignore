@@ -1,0 +1,17 @@
+# Python venv
+AI_SERVICE/.venv/
+**/.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+**/node_modules/
+
+# Env
+.env
+**/.env
+
+# Build
+dist/
+build/
