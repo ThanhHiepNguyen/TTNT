@@ -1,13 +1,225 @@
+"""
+RAG Service - Retrieval-Augmented Generation cho Phonify AI Chat
+
+CHIẾN LƯỢC RAG:
+===============
+1. Vector Search (Semantic Search) - CHÍNH
+   - Dùng sentence-transformers để tạo embeddings
+   - Vector similarity search thay vì keyword matching
+   - Hiểu ngữ nghĩa: "máy chụp hình xuyên màn đêm" → tìm đúng sản phẩm có tính năng đó
+   - In-memory vector store với caching
+
+2. Pipeline:
+   a) Vector Embedding: Tạo embeddings cho query và products
+      - Query embedding: Từ câu hỏi của user
+      - Product embeddings: Cache trong memory, update khi cần
+   
+   b) Vector Similarity Search: Cosine similarity giữa query và products
+      - Top-K retrieval (lấy top 10-20 sản phẩm liên quan nhất)
+   
+   c) Optional LLM Reranking: Có thể dùng thêm để fine-tune ranking
+   
+   d) Multi-source Retrieval: Products + Reviews + FAQs
+
+3. Ưu điểm Vector Search:
+   - Hiểu ngữ nghĩa, không phụ thuộc keyword matching
+   - Xử lý được synonyms, paraphrasing
+   - Không cần extract_search_term() nữa
+   - Chính xác hơn cho câu hỏi phức tạp
+
+4. Trade-offs:
+   - Cần compute embeddings (nhưng có cache)
+   - Tốn memory để store vectors (nhưng in-memory đủ cho hàng nghìn products)
+   - Có thể kết hợp với keyword search (hybrid) nếu cần
+"""
+
+# Fix encoding for Vietnamese characters on Windows
+import sys
+import io
+if sys.platform == 'win32':
+    # Set UTF-8 encoding for stdout/stderr on Windows
+    if not isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if not isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 import os
 import httpx
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import google.generativeai as genai
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import re
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 genai.configure(api_key=GEMINI_API_KEY)
+
+# Helper function for safe printing Vietnamese text
+def safe_print(*args, **kwargs):
+    """Print with UTF-8 encoding, handles Vietnamese characters safely"""
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        # Fallback: encode to ASCII with replacement
+        safe_args = [str(arg).encode('ascii', 'replace').decode('ascii') if isinstance(arg, str) else arg for arg in args]
+        print(*safe_args, **kwargs)
+
+# Vector Search Setup
+# Dùng model hỗ trợ tiếng Việt tốt
+# Fallback: paraphrase-multilingual-MiniLM-L12-v2 (hỗ trợ 50+ ngôn ngữ bao gồm tiếng Việt)
+EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+_embedding_model = None
+_product_embeddings_cache = {}  # {product_id: embedding_vector}
+_product_metadata_cache = {}  # {product_id: product_dict}
+_model_loading_started = False
+_model_loading_error = None
+
+def get_embedding_model():
+    """Lazy load embedding model (chỉ load 1 lần khi cần)"""
+    global _embedding_model, _model_loading_started, _model_loading_error
+    if _embedding_model is None and not _model_loading_started:
+        _model_loading_started = True
+        print("[RAG] Loading embedding model (this may take 1-2 minutes on first run)...")
+        print("[RAG] If download fails, system will fallback to keyword search")
+        try:
+            # Set environment variable để tăng timeout cho HuggingFace
+            import os
+            os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'  # 5 phút
+            
+            _embedding_model = SentenceTransformer(
+                EMBEDDING_MODEL_NAME,
+                device='cpu'  # Dùng CPU để tránh lỗi GPU
+            )
+            print(f"[RAG] ✅ Loaded embedding model: {EMBEDDING_MODEL_NAME}")
+            _model_loading_error = None
+        except Exception as e:
+            _model_loading_error = str(e)
+            print(f"[RAG] ❌ Failed to load embedding model: {e}")
+            print(f"[RAG] System will use keyword search as fallback")
+            # Không raise error, để hệ thống fallback về keyword search
+            _model_loading_started = False  # Cho phép retry sau
+    elif _embedding_model is None and _model_loading_started and _model_loading_error is None:
+        # Model đang được load, đợi một chút
+        import time
+        max_wait = 10  # Đợi tối đa 10 giây
+        waited = 0
+        while _embedding_model is None and waited < max_wait and _model_loading_error is None:
+            time.sleep(0.5)
+            waited += 0.5
+    return _embedding_model
+
+def get_embedding_model_status():
+    """Lấy trạng thái của embedding model"""
+    global _embedding_model, _model_loading_started, _model_loading_error
+    if _embedding_model is not None:
+        return {"status": "loaded", "model": EMBEDDING_MODEL_NAME}
+    elif _model_loading_error:
+        return {"status": "error", "error": _model_loading_error}
+    elif _model_loading_started:
+        return {"status": "loading", "model": EMBEDDING_MODEL_NAME}
+    else:
+        return {"status": "not_started", "model": EMBEDDING_MODEL_NAME}
+
+# Disable pre-load trong background thread vì có thể gây timeout
+# Model sẽ được load khi cần (lazy load) và fallback về keyword search nếu fail
+# Pre-load có thể được enable lại sau khi model đã được download thành công
+
+def generate_embedding(text: str) -> np.ndarray:
+    """Tạo embedding vector cho một đoạn text"""
+    if not text or not text.strip():
+        text = ""
+    model = get_embedding_model()
+    embedding = model.encode(text, normalize_embeddings=True)
+    return embedding
+
+def generate_product_embedding(product: Dict) -> np.ndarray:
+    """Tạo embedding cho một sản phẩm từ các thông tin: name, category, description"""
+    text_parts = []
+    
+    # Tên sản phẩm (quan trọng nhất)
+    if product.get("name"):
+        text_parts.append(product["name"])
+    
+    # Category
+    if product.get("category"):
+        text_parts.append(product["category"])
+    
+    # Description
+    if product.get("description"):
+        desc = product["description"]
+        # Giới hạn description để tránh quá dài
+        if len(desc) > 500:
+            desc = desc[:500]
+        text_parts.append(desc)
+    
+    # Brand (nếu có trong name)
+    # Các tính năng đặc trưng có thể extract từ description
+    
+    combined_text = " ".join(text_parts)
+    return generate_embedding(combined_text)
+
+def cosine_similarity(vec1: np.ndarray, vec2: np.ndarray) -> float:
+    """Tính cosine similarity giữa 2 vectors"""
+    return np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+
+async def vector_search_products(
+    query: str, 
+    products: List[Dict], 
+    top_k: int = 10
+) -> List[Tuple[Dict, float]]:
+    """
+    Vector similarity search: Tìm top-k sản phẩm liên quan nhất với query.
+    
+    Returns:
+        List of (product, similarity_score) tuples, sorted by similarity descending
+    """
+    if not products:
+        return []
+    
+    try:
+        # 1. Tạo embedding cho query
+        query_embedding = generate_embedding(query)
+        print(f"🔢 [Vector Search] Generated query embedding (dim={len(query_embedding)})")
+        
+        # 2. Tạo/cache embeddings cho products
+        product_scores = []
+        for product in products:
+            product_id = str(product.get("productId", id(product)))
+            
+            # Check cache
+            if product_id in _product_embeddings_cache:
+                product_embedding = _product_embeddings_cache[product_id]
+            else:
+                # Generate và cache
+                product_embedding = generate_product_embedding(product)
+                _product_embeddings_cache[product_id] = product_embedding
+                _product_metadata_cache[product_id] = product
+            
+            # 3. Tính similarity
+            similarity = cosine_similarity(query_embedding, product_embedding)
+            product_scores.append((product, float(similarity)))
+        
+        # 4. Sort by similarity (descending) và lấy top-k
+        product_scores.sort(key=lambda x: x[1], reverse=True)
+        top_results = product_scores[:top_k]
+        
+        # Log similarity scores để debug
+        if top_results:
+            top_similarity = top_results[0][1]
+            print(f"🎯 [Vector Search] Found {len(top_results)} products")
+            print(f"   Top similarity scores: {[f'{score:.3f}' for _, score in top_results[:5]]}")
+        else:
+            print(f"🎯 [Vector Search] No products found")
+        
+        return top_results
+    
+    except Exception as e:
+        print(f"[RAG] Vector search failed: {e}")
+        # Fallback: trả về products gốc
+        return [(p, 0.0) for p in products[:top_k]]
 
 def should_search_products(message: str) -> bool:
     lower_message = message.lower().strip()
@@ -26,35 +238,219 @@ def should_search_products(message: str) -> bool:
     return any(keyword in lower_message for keyword in keywords)
 
 def extract_search_term(message: str) -> str:
+    """
+    Trích xuất từ khóa tìm kiếm từ câu hỏi của user.
+    Ưu tiên: Brand > Tính năng đặc trưng > Từ khóa chung
+    
+    Vấn đề: Logic đơn giản có thể bỏ sót từ khóa quan trọng.
+    Ví dụ: "máy chụp hình xuyên màn đêm" → chỉ lấy "máy" → quá chung.
+    
+    Giải pháp: Dùng LLM để extract chính xác hơn (có thể implement sau).
+    """
     lower_message = message.lower().strip()
     brand_keywords = ["iphone", "samsung", "xiaomi", "oppo", "vivo", "realme", "oneplus", "nokia", "huawei", "galaxy", "pixel", "google"]
     
+    # Ưu tiên 1: Tìm brand
     for brand in brand_keywords:
         if brand in lower_message:
             return brand
     
+    # Ưu tiên 2: Tìm từ khóa đặc trưng (tính năng, model)
+    feature_keywords = [
+        "chụp hình", "chụp ảnh", "camera", "pin", "màn hình", "ram", "rom", 
+        "xuyên màn", "night mode", "zoom", "selfie", "5g", "4g",
+        "pro", "max", "ultra", "plus", "mini", "se"
+    ]
+    
+    for feature in feature_keywords:
+        if feature in lower_message:
+            # Lấy cả cụm từ nếu có
+            idx = lower_message.find(feature)
+            words_around = lower_message[max(0, idx-10):idx+len(feature)+10].split()
+            # Lọc và lấy các từ có nghĩa
+            meaningful_words = [w for w in words_around if len(w) > 2 and w not in ["có", "là", "và", "với"]]
+            if meaningful_words:
+                return " ".join(meaningful_words[:3])  # Lấy tối đa 3 từ
+    
+    # Ưu tiên 3: Nếu có "điện thoại" nhưng không có brand/tính năng cụ thể → trả rỗng để search rộng
     if "điện thoại" in lower_message or "phone" in lower_message:
         return ""
     
-    words = [w for w in lower_message.split() if len(w) > 2]
+    # Ưu tiên 4: Lấy các từ có nghĩa (bỏ stop words)
+    stop_words = ["có", "không", "là", "của", "và", "với", "cho", "từ", "đến", "về", "nào", "gì", "máy"]
+    words = [w for w in lower_message.split() if len(w) > 2 and w not in stop_words]
     if words:
-        return words[0]
+        # Lấy tối đa 2-3 từ đầu tiên có nghĩa
+        return " ".join(words[:3])
     
     return ""
+
+def extract_price_intent(message: str) -> Tuple[str, int]:
+    """
+    Trích xuất điều kiện giá và giá mục tiêu (VNĐ) từ câu hỏi.
+    Return: (price_condition, price_value_vnd)
+      - price_condition: "duoi" | "tu" | "tren" | "khoang" | ""
+      - price_value_vnd: int (0 nếu không có)
+    """
+    text = (message or "").lower().strip()
+    if not text:
+        return "", 0
+
+    condition = ""
+    if "dưới" in text or "duoi" in text:
+        condition = "duoi"
+    elif "trên" in text or "tren" in text:
+        condition = "tren"
+    elif "từ" in text or re.search(r"\btu\b", text):
+        condition = "tu"
+    elif "khoảng" in text or "khoang" in text or "tầm" in text or re.search(r"\btam\b", text):
+        condition = "khoang"
+
+    # Match số + đơn vị (hỗ trợ 8, 8.5, 8,5 triệu)
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(triệu|tr|k|nghìn|ngàn|vnđ|vnd|đ|đồng|dong)?", text)
+    if not m:
+        return condition, 0
+
+    raw_amount, unit = m.group(1), (m.group(2) or "").strip()
+    try:
+        amount = float(raw_amount.replace(",", "."))
+    except Exception:
+        return condition, 0
+
+    unit = unit.lower()
+    if unit in ["triệu", "tr"]:
+        value = int(amount * 1_000_000)
+    elif unit in ["k", "nghìn", "ngàn"]:
+        value = int(amount * 1_000)
+    elif unit in ["vnđ", "vnd", "đ", "đồng", "dong"]:
+        value = int(amount)
+    else:
+        # Không có đơn vị: heuristic
+        # Nếu số nhỏ và câu có "triệu/tr/tầm/khoảng" thì hiểu là triệu
+        if amount < 1000 and ("triệu" in text or re.search(r"\btr\b", text) or "tầm" in text or "khoảng" in text or "khoang" in text):
+            value = int(amount * 1_000_000)
+        else:
+            value = int(amount)
+
+    if value < 0:
+        value = 0
+
+    # Nếu có giá mà không có điều kiện, mặc định coi là "khoang"
+    if value and not condition:
+        condition = "khoang"
+
+    return condition, value
+
+def prefilter_products_by_price(products: List[Dict], price_condition: str, price_value: int) -> List[Dict]:
+    """
+    Lọc sản phẩm theo tầm giá trước khi vector search để tránh lệch giá.
+    Quy ước:
+    - khoang/tầm: +/-30%
+    - duoi: [70%..100%] * target
+    - tren/tu: [100%..130%] * target
+    Nếu lọc ra rỗng -> trả list gốc (không làm mất dữ liệu).
+    """
+    if not products or not price_value:
+        return products
+
+    def get_price(p: Dict) -> int:
+        try:
+            return int(p.get("salePrice") or p.get("price") or p.get("minPrice") or 0)
+        except Exception:
+            return 0
+
+    if price_condition == "duoi":
+        min_p = int(price_value * 0.7)
+        max_p = int(price_value)
+    elif price_condition in ["tren", "tu"]:
+        min_p = int(price_value)
+        max_p = int(price_value * 1.3)
+    else:  # khoang/unknown
+        min_p = int(price_value * 0.7)
+        max_p = int(price_value * 1.3)
+
+    filtered = [p for p in products if (min_p <= get_price(p) <= max_p)]
+    if filtered:
+        safe_print(f"🎯 [RAG] Price prefilter kept {len(filtered)}/{len(products)} products in [{min_p:,}..{max_p:,}]")
+        return filtered
+
+    safe_print(f"🎯 [RAG] Price prefilter removed all products for [{min_p:,}..{max_p:,}], keeping original list")
+    return products
+
+async def extract_search_term_with_llm(message: str) -> str:
+    """
+    Dùng LLM để trích xuất từ khóa tìm kiếm chính xác hơn.
+    Hữu ích cho các câu hỏi phức tạp như "máy chụp hình xuyên màn đêm".
+    
+    Trade-off: Tốn 1 API call nhưng tăng độ chính xác đáng kể.
+    """
+    try:
+        model_name = GEMINI_MODEL
+        if not model_name.startswith("models/"):
+            model_name = f"models/{model_name}"
+        try:
+            model = genai.GenerativeModel(model_name=model_name)
+        except TypeError:
+            model = genai.GenerativeModel(GEMINI_MODEL)
+        
+        prompt = f"""Bạn là hệ thống trích xuất từ khóa tìm kiếm. Từ câu hỏi của khách hàng, hãy trích xuất 1-3 từ khóa quan trọng nhất để tìm sản phẩm điện thoại.
+
+Câu hỏi: "{message}"
+
+Yêu cầu:
+- Nếu có tên thương hiệu (iPhone, Samsung, Xiaomi...), ưu tiên lấy tên thương hiệu
+- Nếu có tính năng đặc trưng (chụp hình xuyên màn, camera zoom, pin lâu...), lấy tính năng đó
+- Nếu có model cụ thể (iPhone 15, Galaxy S24...), lấy model
+- Chỉ trả về từ khóa, không giải thích, tối đa 3 từ, cách nhau bởi dấu cách
+
+Ví dụ:
+- "máy chụp hình xuyên màn đêm" → "chụp hình xuyên màn"
+- "điện thoại iPhone giá rẻ" → "iphone"
+- "Samsung Galaxy S24 có camera tốt không" → "samsung galaxy s24"
+- "điện thoại pin lâu" → "pin lâu"
+
+Từ khóa:"""
+        
+        response = model.generate_content(prompt)
+        search_term = response.text.strip().lower()
+        
+        # Làm sạch kết quả (bỏ dấu câu, giữ lại từ khóa)
+        search_term = " ".join([w for w in search_term.split() if len(w) > 1])
+        return search_term[:50]  # Giới hạn độ dài
+    except Exception as e:
+        print(f"[RAG] LLM search term extraction failed: {e}, falling back to rule-based")
+        return extract_search_term(message)
 
 def extract_keywords(query: str) -> List[str]:
     stop_words = ["có", "không", "là", "của", "và", "với", "cho", "từ", "đến", "về", "nào", "gì"]
     return [w for w in query.lower().split() if len(w) > 2 and w not in stop_words][:5]
 
-async def get_products_from_backend(backend_url: str, search_term: str = "") -> List[Dict]:
+async def get_products_from_backend(backend_url: str, search_term: str = "", limit: int = 50) -> List[Dict]:
+    """
+    Lấy products từ backend.
+
+    Args:
+        search_term: Từ khóa tìm kiếm (optional, có thể dùng cho keyword fallback)
+        limit: Giới hạn số lượng products (để vector search không quá chậm)
+    """
+    print(f"[RAG] get_products_from_backend called with search_term='{search_term}', limit={limit}")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
+            # Nếu có search_term, dùng keyword search (fallback)
+            # Nếu không, lấy tất cả products để vector search
+            params = {}
+            if search_term:
+                params["search"] = search_term
+            if limit:
+                params["limit"] = limit
+            
             response = await client.get(
                 f"{backend_url}/api/v1/internal/products/search",
-                params={"search": search_term} if search_term else {}
+                params=params if params else {}
             )
             if response.status_code == 200:
                 data = response.json()
+                print(f"[RAG] Backend response status: {response.status_code}")
                 # Hỗ trợ cả hai format: {data: {products: [...]}} và {products: [...]}
                 products = (
                     data.get("data", {}).get("products")
@@ -62,7 +458,11 @@ async def get_products_from_backend(backend_url: str, search_term: str = "") -> 
                 )
                 if not products and isinstance(data, dict):
                     products = data.get("products")
+                print(f"[RAG] Retrieved {len(products or [])} products from backend")
+                if products and len(products) > 0:
+                    print(f"[RAG] First product: {products[0].get('name', 'Unknown')}")
                 return products or []
+            print(f"[RAG] Backend error: {response.status_code}")
             return []
     except Exception as e:
         print(f"[RAG] Error fetching products: {e}")
@@ -170,34 +570,124 @@ Ví dụ: 3, 1, 5, 2, 4"""
         print(f"[RAG] Semantic search failed: {e}")
         return products
 
-async def retrieve_context(user_message: str, backend_url: str) -> Dict:
+async def retrieve_context(
+    user_message: str,
+    backend_url: str,
+    use_vector_search: bool = True,
+    use_llm_reranking: bool = False
+) -> Dict:
+    """
+    MAIN ISSUE: Vector search may not work, falling back to keyword search
+    which might return same products due to backend API limitations
+    """
+    """
+    Retrieve context từ nhiều nguồn: products, reviews, FAQs.
+    
+    Args:
+        user_message: Câu hỏi của user
+        backend_url: URL của backend API
+        use_vector_search: Nếu True, dùng Vector Search (semantic). Nếu False, dùng Keyword Search (fallback)
+        use_llm_reranking: Nếu True, dùng thêm LLM để rerank kết quả vector search (optional)
+    
+    Strategy (Vector Search):
+        1. Vector Search: Lấy products từ backend → tạo embeddings → similarity search
+        2. Optional LLM Reranking: Fine-tune ranking nếu cần
+        3. Multi-source: Kết hợp products + reviews + FAQs
+    """
     try:
         print(f"🔍 [RAG] Starting retrieval for: {user_message}")
         
-        query = user_message.lower()
-        search_term = extract_search_term(user_message)
-        
-        keyword_results = []
-        semantic_results = []
+        vector_results = []
+        final_products = []
+        search_term_used = ""
+        price_condition, price_value = extract_price_intent(user_message)
         
         if should_search_products(user_message):
-            keyword_results = await get_products_from_backend(backend_url, search_term)
-            print(f"📦 [RAG] Keyword search found: {len(keyword_results)} products")
+            if use_vector_search:
+                # ===== VECTOR SEARCH (Semantic Search) =====
+                print("🔢 [RAG] Using Vector Search (Semantic Search)")
+                
+                try:
+                    # 1. Lấy products từ backend (không cần search_term)
+                    all_products = await get_products_from_backend(backend_url, limit=50)
+                    print(f"📦 [RAG] Fetched {len(all_products)} products from backend")
+                    
+                    if all_products:
+                        # 1.5. Pre-filter theo giá trước khi vector search để tránh lệch giá
+                        all_products = prefilter_products_by_price(all_products, price_condition, price_value)
+
+                        # 2. Vector similarity search
+                        try:
+                            vector_results = await vector_search_products(
+                                user_message, 
+                                all_products, 
+                                top_k=10
+                            )
+                            
+                            # Extract products từ results (bỏ similarity scores)
+                            # Chỉ lấy sản phẩm có similarity > threshold (0.3) để đảm bảo liên quan
+                            SIMILARITY_THRESHOLD = 0.3
+                            final_products = [
+                                product for product, score in vector_results 
+                                if score >= SIMILARITY_THRESHOLD
+                            ]
+                            
+                            if not final_products and vector_results:
+                                # Nếu không có sản phẩm nào đạt threshold, lấy top 3 có similarity cao nhất
+                                print(f"⚠️ [RAG] No products above threshold {SIMILARITY_THRESHOLD}, using top 3")
+                                final_products = [product for product, score in vector_results[:3]]
+                            
+                            print(f"📊 [RAG] Filtered to {len(final_products)} products above threshold")
+                            
+                            # Optional: LLM reranking để fine-tune
+                            if use_llm_reranking and final_products:
+                                print("🧠 [RAG] Applying LLM reranking...")
+                                final_products = await semantic_search(user_message, final_products)
+                                print(f"🧠 [RAG] LLM reranking completed")
+                            
+                            print(f"✅ [RAG] Vector search found {len(final_products)} relevant products")
+                        except Exception as vec_error:
+                            # Vector search failed (model chưa load, hoặc lỗi khác)
+                            print(f"⚠️ [RAG] Vector search failed: {vec_error}, falling back to keyword search")
+                            use_vector_search = False  # Trigger fallback
+                            raise  # Re-raise để trigger fallback block
+                    else:
+                        print("⚠️ [RAG] No products from backend, skipping vector search")
+                        use_vector_search = False  # Fallback to keyword
+                except Exception as e:
+                    # Vector search failed, fallback to keyword search
+                    print(f"⚠️ [RAG] Vector search error: {e}, falling back to keyword search")
+                    use_vector_search = False
             
-            if keyword_results:
-                semantic_results = await semantic_search(user_message, keyword_results)
-                print(f"🧠 [RAG] Semantic ranking completed")
+            # Nếu vector search thành công nhưng không ra sản phẩm, fallback keyword search
+            if use_vector_search and not final_products:
+                print("🔄 [RAG] No products from vector search, fallback to keyword search")
+                search_term_used = extract_search_term(user_message)
+                keyword_results = await get_products_from_backend(backend_url, search_term_used)
+                keyword_results = prefilter_products_by_price(keyword_results, price_condition, price_value)
+                print(f"📦 [RAG] Keyword fallback found: {len(keyword_results)} products")
+                final_products = keyword_results
+
+            if not use_vector_search:
+                # ===== KEYWORD SEARCH (Fallback) =====
+                print("🔑 [RAG] Using Keyword Search (fallback)")
+                search_term_used = extract_search_term(user_message)
+                keyword_results = await get_products_from_backend(backend_url, search_term_used)
+                keyword_results = prefilter_products_by_price(keyword_results, price_condition, price_value)
+                print(f"📦 [RAG] Keyword search found: {len(keyword_results)} products")
+                final_products = keyword_results
         
+        # Reviews và FAQs vẫn dùng keyword-based (có thể upgrade sau)
         keywords = extract_keywords(user_message)
         reviews = await get_reviews_from_backend(backend_url, keywords)
         faqs = get_faqs(user_message)
         
         context = {
-            "products": semantic_results if semantic_results else keyword_results,
+            "products": final_products,
             "reviews": reviews,
             "faqs": faqs,
             "query": user_message,
-            "search_term": search_term
+            "search_term": search_term_used
         }
         
         print(f"✅ [RAG] Retrieved: {len(context['products'])} products, {len(context['reviews'])} reviews, {len(context['faqs'])} FAQs")
@@ -205,6 +695,8 @@ async def retrieve_context(user_message: str, backend_url: str) -> Dict:
         return context
     except Exception as e:
         print(f"[RAG] Error in retrieval: {e}")
+        import traceback
+        traceback.print_exc()
         return {
             "products": [],
             "reviews": [],
