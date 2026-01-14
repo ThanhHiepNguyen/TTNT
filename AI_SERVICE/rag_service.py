@@ -76,7 +76,7 @@ _embedding_model = None
 _product_embeddings_cache = {}  # {product_id: embedding_vector}
 _product_metadata_cache = {}  # {product_id: product_dict}
 _policy_database = []         # Lưu các đoạn văn bản từ PDF
-_policy_embeddings_cache = []  # Lưu vector tương ứng của các đoạn đó
+_policy_embeddings_cache = [] # Lưu vector tương ứng của các đoạn đó
 _model_loading_started = False
 _model_loading_error = None
 
@@ -202,6 +202,7 @@ async def vector_search_products(
                 _product_metadata_cache[product_id] = product
             
             # 3. Tính similarity
+            # Similarity score giữa user query và product vector
             similarity = cosine_similarity(query_embedding, product_embedding)
             product_scores.append((product, float(similarity)))
         
@@ -223,9 +224,10 @@ async def vector_search_products(
         print(f"[RAG] Vector search failed: {e}")
         # Fallback: trả về products gốc
         return [(p, 0.0) for p in products[:top_k]]
-    
+
 def should_search_policies(message: str) -> bool:
-    keywords = ["chính sách", "bảo hành", "đổi trả", "giao hàng", "vận chuyển", "thanh toán", "quy định"]
+    # Thêm các từ khóa không dấu để AI nhận diện tốt hơn
+    keywords = ["chính sách", "chinh sach", "bảo hành", "bao hanh", "đổi trả", "doi tra", "giao hàng", "giao hang", "vận chuyển", "van chuyen", "thanh toán", "quy định", "quy dinh"]
     return any(k in message.lower() for k in keywords)
 
 def should_search_products(message: str) -> bool:
@@ -577,6 +579,46 @@ Ví dụ: 3, 1, 5, 2, 4"""
         print(f"[RAG] Semantic search failed: {e}")
         return products
 
+# --- BẮT ĐẦU PHẦN TÍCH HỢP PDF ---
+def load_policies_from_pdfs(folder_path="./data/policies"):
+    """Quét thư mục và trích xuất text từ file PDF chính sách"""
+    global _policy_database, _policy_embeddings_cache
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+        return
+    for filename in os.listdir(folder_path):
+        if filename.lower().endswith(".pdf"):
+            try:
+                with open(os.path.join(folder_path, filename), "rb") as f:
+                    pdf = PyPDF2.PdfReader(f)
+                    content = ""
+                    for page in pdf.pages:
+                        content += page.extract_text() + "\n"
+                    if content.strip():
+                        # Chia nhỏ văn bản để tìm kiếm chính xác hơn
+                        chunks = [content[i:i+800] for i in range(0, len(content), 600)]
+                        for chunk in chunks:
+                            _policy_database.append({"source": filename, "content": chunk.strip()})
+                print(f"[PDF] ✅ Đã nạp file: {filename}")
+            except Exception as e:
+                print(f"[PDF] ❌ Lỗi đọc file {filename}: {e}")
+    if _policy_database:
+        print(f"[PDF] ⚙️ Đang tạo vector cho {len(_policy_database)} đoạn chính sách...")
+        _policy_embeddings_cache = [generate_embedding(item["content"]) for item in _policy_database]
+
+def search_policies_vector(query: str, top_k: int = 2):
+    """Tìm kiếm ngữ nghĩa trong dữ liệu PDF chính sách"""
+    if not _policy_embeddings_cache: return []
+    query_emb = generate_embedding(query)
+    scores = []
+    for i, p_emb in enumerate(_policy_embeddings_cache):
+        sim = cosine_similarity(query_emb, p_emb)
+        scores.append((i, sim))
+    scores.sort(key=lambda x: x[1], reverse=True)
+    # Ngưỡng similarity 0.3 để lấy kết quả linh hoạt
+    return [_policy_database[i] for i, sim in scores[:top_k] if sim > 0.3]
+# --- KẾT THÚC PHẦN TÍCH HỢP PDF ---
+
 async def retrieve_context(
     user_message: str,
     backend_url: str,
@@ -604,22 +646,22 @@ async def retrieve_context(
     try:
         print(f"🔍 [RAG] Starting retrieval for: {user_message}")
         
+        # --- BƯỚC 0: Khởi tạo tất cả biến để tránh lỗi "NameError" ---
         vector_results = []
         final_products = []
+        relevant_policies = []
         search_term_used = ""
+        reviews = []
+        faqs = []
+
         price_condition, price_value = extract_price_intent(user_message)
         
-        relevant_policies = []
+        # --- BƯỚC 1: Tìm kiếm Chính sách từ PDF ---
         if should_search_policies(user_message):
+            print(f"📄 [RAG] Đang tìm chính sách trong PDF cho: {user_message}")
             relevant_policies = search_policies_vector(user_message)
-            return {
-            "products": final_products,
-            "reviews": reviews,
-            "faqs": faqs,
-            "policies": relevant_policies, # THÊM DÒNG NÀY
-            "query": user_message,
-            "search_term": search_term_used
-        }
+
+        # --- BƯỚC 2: Tìm kiếm Sản phẩm từ Database ---
         if should_search_products(user_message):
             if use_vector_search:
                 # ===== VECTOR SEARCH (Semantic Search) =====
@@ -668,7 +710,6 @@ async def retrieve_context(
                             # Vector search failed (model chưa load, hoặc lỗi khác)
                             print(f"⚠️ [RAG] Vector search failed: {vec_error}, falling back to keyword search")
                             use_vector_search = False  # Trigger fallback
-                            raise  # Re-raise để trigger fallback block
                     else:
                         print("⚠️ [RAG] No products from backend, skipping vector search")
                         use_vector_search = False  # Fallback to keyword
@@ -695,7 +736,7 @@ async def retrieve_context(
                 print(f"📦 [RAG] Keyword search found: {len(keyword_results)} products")
                 final_products = keyword_results
         
-        # Reviews và FAQs vẫn dùng keyword-based (có thể upgrade sau)
+        # --- BƯỚC 3: Reviews và FAQs vẫn dùng keyword-based (có thể upgrade sau) ---
         keywords = extract_keywords(user_message)
         reviews = await get_reviews_from_backend(backend_url, keywords)
         faqs = get_faqs(user_message)
@@ -704,11 +745,12 @@ async def retrieve_context(
             "products": final_products,
             "reviews": reviews,
             "faqs": faqs,
+            "policies": relevant_policies,  # Thêm kết quả PDF vào context
             "query": user_message,
             "search_term": search_term_used
         }
         
-        print(f"✅ [RAG] Retrieved: {len(context['products'])} products, {len(context['reviews'])} reviews, {len(context['faqs'])} FAQs")
+        print(f"✅ [RAG] Retrieved: {len(context['products'])} products, {len(context['reviews'])} reviews, {len(context['faqs'])} FAQs, {len(context['policies'])} policies")
         
         return context
     except Exception as e:
@@ -719,13 +761,15 @@ async def retrieve_context(
             "products": [],
             "reviews": [],
             "faqs": [],
+            "policies": [],
             "query": user_message,
             "search_term": ""
         }
 
 def format_rag_context(context: Dict) -> str:
     formatted_context = ""
- 
+    
+    # Thêm phần Chính sách từ PDF vào format ngữ cảnh
     if context.get("policies"):
         formatted_context += "\n\n[QUY ĐỊNH CỬA HÀNG TỪ PDF]:\n"
         for p in context["policies"]:
@@ -770,41 +814,5 @@ def format_rag_context(context: Dict) -> str:
     
     return formatted_context
 
-def load_policies_from_pdfs(folder_path="./data/policies"):
-    """Quét thư mục và trích xuất text từ file PDF"""
-    global _policy_database, _policy_embeddings_cache
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-        return
-    for filename in os.listdir(folder_path):
-        if filename.lower().endswith(".pdf"):
-            try:
-                with open(os.path.join(folder_path, filename), "rb") as f:
-                    pdf = PyPDF2.PdfReader(f)
-                    content = ""
-                    for page in pdf.pages:
-                        content += page.extract_text() + "\n"
-                    if content.strip():
-                        # Chia nhỏ văn bản để tìm kiếm chính xác hơn
-                        chunks = [content[i:i+800] for i in range(0, len(content), 600)]
-                        for chunk in chunks:
-                            _policy_database.append({"source": filename, "content": chunk.strip()})
-            except Exception as e:
-                print(f"[PDF] Lỗi đọc file {filename}: {e}")
-    if _policy_database:
-        for item in _policy_database:
-            _policy_embeddings_cache.append(generate_embedding(item["content"]))
-
-def search_policies_vector(query: str, top_k: int = 2):
-    """Tìm kiếm ngữ nghĩa trong dữ liệu PDF"""
-    if not _policy_embeddings_cache: return []
-    query_emb = generate_embedding(query)
-    scores = []
-    for i, p_emb in enumerate(_policy_embeddings_cache):
-        sim = cosine_similarity(query_emb, p_emb)
-        scores.append((i, sim))
-    scores.sort(key=lambda x: x[1], reverse=True)
-    return [_policy_database[i] for i, sim in scores[:top_k] if sim > 0.35]
-
-# Gọi nạp PDF ngay khi khởi động
+# Gọi nạp PDF ngay khi khởi động app
 load_policies_from_pdfs()
