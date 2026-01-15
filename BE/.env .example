@@ -1,0 +1,9 @@
+# Server
+PORT=8000
+BACKEND_URL=http://localhost:8000
+
+# Database
+DATABASE_URL="postgresql://user:pass@localhost:5432/ttnt?schema=public"
+
+# AI service url
+AI_SERVICE_URL=http://localhost:8001/api/v1/chat
