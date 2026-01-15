@@ -3,8 +3,10 @@ import sys
 import io
 if sys.platform == 'win32':
     # Set UTF-8 encoding for stdout/stderr on Windows
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    if not isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if not isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +40,7 @@ app.add_middleware(
 SYSTEM_PROMPT = """Bạn là một trợ lý AI thân thiện của cửa hàng điện thoại Phonify.
 Nhiệm vụ của bạn là:
 - Tư vấn sản phẩm điện thoại cho khách hàng dựa trên THÔNG TIN ĐƯỢC CUNG CẤP TRONG NGỮ CẢNH (CONTEXT) từ hệ thống
+- Trả lời các câu hỏi về CHÍNH SÁCH, BẢO HÀNH, ĐỔI TRẢ dựa trên dữ liệu [QUY ĐỊNH CỬA HÀNG TỪ PDF] trong context.
 - Trả lời câu hỏi về sản phẩm, giá cả, tồn kho
 - Hỗ trợ khách hàng một cách nhiệt tình và chuyên nghiệp
 - Sử dụng tiếng Việt để giao tiếp
@@ -710,6 +713,11 @@ async def chat(request: ChatRequest):
             print(f"[CHAT] Specific brand '{phone_model or 'unknown'}' requested but no products found, returning text only")
         else:
             # Logic xử lý response đồng bộ với products
+            
+            # --- ĐOẠN TÍCH HỢP PDF ---
+            # Kiểm tra xem có dữ liệu chính sách từ RAG không
+            has_policies = rag_context.get("policies") if rag_context else None
+            
             if products:
                 # Luôn tạo response text dựa trên products thực tế để đảm bảo đồng bộ
                 # Không dùng LLM response vì có thể không khớp với products đã filter
@@ -761,15 +769,21 @@ async def chat(request: ChatRequest):
                 response_text = "\n".join(lines)
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
+                
+            # LOGIC QUAN TRỌNG: Nếu có Chính sách (PDF) nhưng không có sản phẩm
+            elif has_policies:
+                print(f"[CHAT] No products but found policies. Using Gemini's text response.")
+                response_text = cleaned_text
+                response_type = "text"
             else:
-                # Không có products: KHÔNG dùng LLM response để tránh trả thông tin không đồng bộ
+                # Không có products và cũng không có chính sách: Dùng safe fallback
                 price_desc = ""
                 if price_condition and price_value:
                     price_desc = format_price_desc(price_condition, price_value, with_prefix=False)
 
                 brand_text = format_brand_display(phone_model) if phone_model else "điện thoại"
                 response_text = (
-                    f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} phù hợp trong hệ thống để gợi ý. "
+                    f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} hay thông tin chính sách phù hợp trong hệ thống để gợi ý. "
                     "Bạn có thể cung cấp thêm ngân sách hoặc thử từ khóa khác, hoặc liên hệ CSKH để được hỗ trợ nhanh nhất."
                 )
                 response_type = "text"
@@ -813,4 +827,3 @@ async def chat(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=AI_SERVICE_PORT)
-
