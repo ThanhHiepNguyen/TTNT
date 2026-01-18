@@ -10,7 +10,7 @@ const ProductCard = ({ product }) => {
     product.image ||
     product.cheapestOptionImage ||
     product?.options?.[0]?.image ||
-    "https://via.placeholder.com/300";
+    "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yMCAyMEgxNlYyMEgxNlYyNFYyMEgxNlYyNEgzNFYyMEgzNFY0NEgzNFYyNEgzNFY0NEgyMFoiIGZpbGw9IiM5Q0E0QUYiLz4KPHBhdGggZD0iTTIyIDIySDIwVjIySDIwVjI0VjIySDIwVjI0SDIyVjIySDIyVjI0SDIyVjIyWiIgZmlsbD0iIzk0QTNCMSIvPgo8L3N2Zz4K";
 
   return (
     <a
@@ -23,7 +23,7 @@ const ProductCard = ({ product }) => {
           alt={product.name}
           className="w-16 h-16 object-contain rounded-lg bg-gray-50"
           onError={(e) => {
-            e.target.src = "https://via.placeholder.com/300";
+            e.target.src = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiBmaWxsPSIjRjNGNEY2Ii8+CjxwYXRoIGQ9Ik0yMCAyMEgxNlYyMEgxNlYyNFYyMEgxNlYyNEgzNFYyMEgzNFY0NEgzNFYyNEgzNFY0NEgyMFoiIGZpbGw9IiM5Q0E0QUYiLz4KPHBhdGggZD0iTTIyIDIySDIwVjIySDIwVjI0VjIySDIwVjI0SDIyVjIySDIyVjI0SDIyVjIyWiIgZmlsbD0iIzk0QTNCMSIvPgo8L3N2Zz4K";
           }}
         />
         <div className="flex-1 min-w-0">
