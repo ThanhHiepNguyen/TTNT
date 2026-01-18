@@ -24,5 +24,5 @@
 1. **Tìm sản phẩm bằng ảnh** - Upload ảnh, dùng Gemini Vision tìm sản phẩm tương tự
 2. **Voice input/output** - Nói thay vì gõ, AI đọc câu trả lời
 3. **Hỏi đáp đơn hàng/vận chuyển/chính sách** - Xử lý câu hỏi về chính sách
-4. **Điều khiển giỏ hàng bằng chat** - Thêm/xóa/xem giỏ hàng qua chat
+4. **Điều khiển giỏ hàng bằng chat** - Thêm/xóa/xem giỏ hàng qua chat..
 
