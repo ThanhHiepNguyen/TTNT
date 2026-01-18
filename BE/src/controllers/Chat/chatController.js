@@ -98,7 +98,7 @@ export const chat = async (req, res) => {
     const isOnlyAck = /^(ok|oke|ừ|uh|hmm|dạ|yes|no|thanks|thank you)\W*$/i.test(text);
     const isAskingRecommend = /(tư vấn|tu van|tuvan|gợi ý|goi y|recommend|suggest|choose|chọn giúp|chon giup|mua gì|mua gi)/i.test(text);
 
-    // Đếm số lần assistant đã hỏi làm rõ (intent="clarify") để giới hạn 2 lần
+    // Đếm số lần assistant đã hỏi làm rõ (intent="clarify") giới hạn 2 lần
     const clarifyCount = await prisma.chatMessage.count({
       where: { conversationId, role: "assistant", intent: "clarify" },
     });
@@ -113,44 +113,6 @@ export const chat = async (req, res) => {
       vi: "Mình vẫn chưa đủ thông tin để tư vấn chính xác. Bạn cho mình xin *loại sản phẩm* và *ngân sách* (ví dụ: điện thoại ~7 triệu), hoặc mô tả nhu cầu (pin/camera/chơi game) nhé.",
       en: "I still don't have enough details to recommend accurately. Please share the *product type* and *budget* (e.g., phone ~$300), or your priorities (battery/camera/gaming).",
     };
-    function detectIntentHint(text) {
-      const t = (text || "").toLowerCase();
-      if (/(bảo hành|bao hanh|đổi trả|doi tra|return|refund|warranty|ship|shipping|giao hàng|payment|trả góp|tra gop)/i.test(t)) return "policy";
-      if (/(so sánh|so sanh|compare|vs\b)/i.test(t)) return "compare";
-      if (/(tư vấn|tu van|tuvan|gợi ý|goi y|recommend|suggest|choose|mua gì|mua gi)/i.test(t)) return "product_advice";
-      return "other";
-    }
-    function buildClarify(lang, intentHint, { hasCategoryOrModel, hasBudget, hasNeed }) {
-      const en = lang === "en";
-
-      if (intentHint === "policy") {
-        return en
-          ? "Sure — which product/model is this about, and did you buy it online or in-store?"
-          : "Được ạ — bạn đang hỏi chính sách cho *sản phẩm/model nào*, và bạn mua *online hay tại cửa hàng*?";
-      }
-      if (intentHint === "compare") {
-        return en
-          ? "Got it — which 2-3 models do you want to compare, and what matters most (camera/battery/gaming/price)?"
-          : "Ok — bạn muốn so sánh *2-3 mẫu nào*, và bạn ưu tiên tiêu chí gì (camera/pin/chơi game/giá)?";
-      }
-      const missing = [];
-      if (!hasCategoryOrModel) missing.push(en ? "product/model" : "loại/model");
-      if (!hasBudget) missing.push(en ? "budget" : "ngân sách");
-      if (!hasNeed) missing.push(en ? "priorities" : "ưu tiên");
-      if (missing.length >= 2) {
-        return en
-          ? "To recommend well, I need 2 quick details:\n1) What product/model?\n2) Your budget and top priority (gaming/camera/battery)?"
-          : "Để tư vấn chuẩn hơn, bạn cho mình 2 thông tin nhé:\n1) Bạn muốn mua loại/model gì?\n2) Ngân sách và ưu tiên (game/camera/pin) là gì ạ?";
-      }
-      if (missing.length === 1) {
-        return en
-          ? `Quick question: what's your ${missing[0]}?`
-          : `Cho mình hỏi nhanh: bạn cho mình xin *${missing[0]}* được không ạ?`;
-      }
-      return en
-        ? "Could you tell me what you prioritize most: gaming, camera, battery, or best value?"
-        : "Bạn ưu tiên điều gì nhất: chơi game, camera, pin hay giá tốt ạ?";
-    }
 
     if (isAmbiguous) {
       // Lưu user message với cờ mơ hồ
@@ -183,7 +145,7 @@ export const chat = async (req, res) => {
         return sendResponse(res, 200, "Fallback", { response: fallback });
       }
       const intentHint = detectIntentHint(raw);
-      const clarify = buildClarify(lang, intentHint, { hasCategoryOrModel, hasBudget, hasNeed });
+      const clarify = buildClarifyQuestion({lang, intentHint, raw,  hasCategoryOrModel, hasBudget, hasNeed, });
       await prisma.chatMessage.create({
         data: {
           conversationId,

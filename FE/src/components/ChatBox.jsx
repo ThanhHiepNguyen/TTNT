@@ -37,7 +37,7 @@ const ChatBox = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
-      role: "aconst resssistant",
+      role: "assistant",
       content: "Xin chào! Tôi là trợ lý AI của Phonify. Tôi có thể giúp gì cho bạn hôm nay? 😊",
     },
   ]);
@@ -86,7 +86,8 @@ const ChatBox = () => {
   };
   const fetchSuggestions = async () => {
     try {
-      const langForSuggestions = detectLang(inputMessage || "") || "vi";
+      const langForSuggestions = 
+      langMode !== "auto" ? langMode : (detectLang(inputMessage || "") || "vi");
       const res = await chatService.getSuggestions(langForSuggestions);
       const normalized = normalizeSuggestions(res);
 
@@ -99,26 +100,8 @@ const ChatBox = () => {
 
   useEffect(() => {
     if (!isOpen) return;
-
-    let alive = true;
-
-    (async () => {
-      try {
-        const res = await chatService.getSuggestions();
-        const normalized = normalizeSuggestions(res);
-        if (!alive) return;
-
-        if (normalized.length > 0) setQuickReplies(normalized.slice(0, 12));
-        else setQuickReplies(DEFAULT_QUICK_REPLIES);
-      } catch {
-        if (alive) setQuickReplies(DEFAULT_QUICK_REPLIES);
-      }
-    })();
-
-    return () => {
-      alive = false;
-    };
-  }, [isOpen]);
+     fetchSuggestions();
+  }, [isOpen, langMode]);
 
   const ensureConversationId = async () => {
     if (conversationId) return conversationId;
