@@ -19,7 +19,7 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
                 headers: {
                     "Content-Type": "application/json",
                 },
-                timeout: 120000, // 120s (2 phút) - đủ cho lần đầu load embedding model
+                timeout: 30000,
             }
         );
 

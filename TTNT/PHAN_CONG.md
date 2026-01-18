@@ -7,12 +7,12 @@
 4. **Xử lý câu hỏi mơ hồ** - AI hỏi lại thông minh khi không hiểu rõ
 5. **Thống kê & phân tích câu hỏi cho admin** - Dashboard thống kê câu hỏi thường gặp
 
-    ##  Người 2 (5 tính năng)
-    1. **Product cards clickable** - Hiển thị product card có thể click khi AI đề xuất
-    2. **Đề xuất sản phẩm bằng RAG** - Cải thiện RAG service dựa trên dữ liệu shop
-    3. **Tư vấn sản phẩm theo nhu cầu** - Tư vấn dựa trên giá, mục đích, đối tượng
-    4. **Gợi ý sản phẩm thay thế** - Gợi ý khi hết hàng hoặc vượt ngân sách
-    5. **Fallback CSKH** - Chuyển sang CSKH khi AI không chắc chắn
+##  Người 2 (5 tính năng)
+1. **Product cards clickable** - Hiển thị product card có thể click khi AI đề xuất
+2. **Đề xuất sản phẩm bằng RAG** - Cải thiện RAG service dựa trên dữ liệu shop
+3. **Tư vấn sản phẩm theo nhu cầu** - Tư vấn dựa trên giá, mục đích, đối tượng
+4. **Gợi ý sản phẩm thay thế** - Gợi ý khi hết hàng hoặc vượt ngân sách
+5. **Fallback CSKH** - Chuyển sang CSKH khi AI không chắc chắn
 
 ##  Người 3 (4 tính năng)
 1. **So sánh 2-3 sản phẩm** - AI so sánh theo yêu cầu, hiển thị bảng so sánh
