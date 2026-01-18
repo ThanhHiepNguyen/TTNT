@@ -3,7 +3,8 @@ import axios from "axios";
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8001";
 const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 8000}`;
 
-export const generateChatResponse = async (userMessage, conversationHistory = []) => {
+export const generateChatResponse = async (userMessage, conversationHistory = [], language = null) => {
+
     try {
         console.log(`[CHAT] Calling AI service at: ${AI_SERVICE_URL}/api/v1/chat`);
         console.log(`[CHAT] Backend URL: ${API_URL}`);
@@ -14,12 +15,13 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
                 message: userMessage,
                 conversationHistory: conversationHistory,
                 backendUrl: API_URL,
+                language: language,
             },
             {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                timeout: 120000, // 120s (2 phút) - đủ cho lần đầu load embedding model
+                timeout: 30000,
             }
         );
 
@@ -27,8 +29,7 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
             throw new Error("Không nhận được phản hồi hợp lệ từ AI service");
         }
 
-
-        return response.data.data;
+        return response.data.data.response;
     } catch (error) {
         console.error("Error generating chat response:", error);
         console.error("Error code:", error.code);

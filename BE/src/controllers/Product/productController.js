@@ -103,7 +103,7 @@ export const getAllProducts = async (req, res) => {
                     description: product.description,
                     categoryId: product.categoryId,
                     category: product.category,
-                    thumbnail: cheapestOption.image || product.thumbnail,
+                    thumbnail: product.thumbnail || cheapestOption.image,
                     price: cheapestOption.price,
                     salePrice: cheapestOption.salePrice,
                     minPrice: minProductPrice,

@@ -37,4 +37,28 @@ export const authMiddleware = async (req, res, next) => {
     return sendResponse(res, 401, "Token không hợp lệ");
   }
 };
+export const optionalAuthMiddleware = async (req, _res, next) => {
+  try {
+    const bearer = req.headers.authorization;
+    const token =
+      (bearer && bearer.startsWith("Bearer ") ? bearer.split(" ")[1] : null) ||
+      req.cookies?.access_token;
+
+    // Không có token => bỏ qua
+    if (!token) return next();
+
+    // Không có secret => bỏ qua (vẫn cho chat theo sessionId)
+    if (!process.env.JWT_SECRET) return next();
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await prisma.user.findUnique({ where: { userId: decoded.userId } });
+
+    if (user && user.isActive) {
+      req.user = { userId: user.userId, email: user.email, role: user.role };
+    }
+    return next();
+  } catch (_e) {
+    return next();
+  }
+};
 

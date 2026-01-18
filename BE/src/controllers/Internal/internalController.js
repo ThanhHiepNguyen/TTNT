@@ -5,27 +5,17 @@ export const getProductsForAI = async (req, res) => {
     try {
         const { search } = req.query;
         const searchTerm = search?.trim().toLowerCase() || "";
-        console.log(`[INTERNAL] getProductsForAI called with search: '${searchTerm}'`);
 
         let whereCondition = {};
 
-        // ISSUE: Không có filter khi searchTerm rỗng, trả về tất cả products
         if (searchTerm) {
             whereCondition = {
                 OR: [
                     { name: { contains: searchTerm, mode: "insensitive" } },
                     { description: { contains: searchTerm, mode: "insensitive" } },
-                    // Thêm search trong category name
-                    { category: { name: { contains: searchTerm, mode: "insensitive" } } }
                 ],
             };
-        } else {
-            // Khi không có search term (vector search), giới hạn số lượng
-            console.log(`[INTERNAL] No search term, returning limited products for vector search`);
         }
-
-        // ISSUE: take: 10 quá ít cho vector search
-        const limit = searchTerm ? 10 : 50; // Vector search cần nhiều products hơn
 
         const products = await prisma.product.findMany({
             where: whereCondition,
@@ -33,7 +23,6 @@ export const getProductsForAI = async (req, res) => {
                 productId: true,
                 name: true,
                 description: true,
-                thumbnail: true,
                 category: {
                     select: {
                         name: true,
@@ -47,16 +36,13 @@ export const getProductsForAI = async (req, res) => {
                         stockQuantity: true,
                         color: true,
                         version: true,
-                        image: true,
                     },
                     orderBy: { price: "asc" },
                     take: 1,
                 },
             },
-            take: limit,
+            take: 10,
         });
-
-        console.log(`[INTERNAL] Found ${products.length} products`);
 
         const formattedProducts = products
             .filter((p) => p.options && p.options.length > 0)
@@ -68,10 +54,7 @@ export const getProductsForAI = async (req, res) => {
                     name: product.name,
                     description: product.description,
                     category: product.category.name,
-                    thumbnail: option.image || product.thumbnail,
-                    price: option.price,
-                    salePrice: option.salePrice,
-                    minPrice: price, // giá thấp nhất (salePrice nếu có, không thì price)
+                    price: price,
                     stockQuantity: option.stockQuantity,
                     inStock: option.stockQuantity > 0,
                 };

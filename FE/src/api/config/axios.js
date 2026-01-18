@@ -20,6 +20,13 @@ axiosInstance.interceptors.request.use(
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
+        const chatSessionIdKey = "chatSessionId";
+        let sid = localStorage.getItem(chatSessionIdKey);
+        if (!sid) {
+            sid = (crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+            localStorage.setItem(chatSessionIdKey, sid);
+        }
+        config.headers["x-session-id"] = sid;
         return config;
     },
     (error) => {
