@@ -3,7 +3,7 @@ import axios from "axios";
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8001";
 const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 8000}`;
 
-export const generateChatResponse = async (userMessage, conversationHistory = []) => {
+export const generateChatResponse = async (userMessage, conversationHistory = [], language = null) => {
     try {
         console.log(`[CHAT] Calling AI service at: ${AI_SERVICE_URL}/api/v1/chat`);
         console.log(`[CHAT] Backend URL: ${API_URL}`);
@@ -14,6 +14,7 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
                 message: userMessage,
                 conversationHistory: conversationHistory,
                 backendUrl: API_URL,
+                language: language,
             },
             {
                 headers: {

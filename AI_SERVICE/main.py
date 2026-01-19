@@ -1,6 +1,7 @@
 # Fix encoding for Vietnamese characters on Windows
 import sys
 import io
+from urllib import request
 if sys.platform == 'win32':
     # Set UTF-8 encoding for stdout/stderr on Windows
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -79,6 +80,57 @@ Bạn quan tâm đến Samsung Galaxy S23 hay sản phẩm nào khác ạ?
 Sản phẩm gợi ý:"
 
 Luôn trả lời ngắn gọn, rõ ràng, thân thiện và ưu tiên độ chính xác của dữ liệu hơn là văn phong."""
+SYSTEM_PROMPT_EN = """You are a friendly AI assistant for the Phonify phone store.
+Your tasks are:
+- Advise customers on phone products based on the provided CONTEXT from the system
+- Answer questions about products, prices, and stock
+- Assist customers in a warm and professional manner
+- Communicate in English
+- Do NOT invent prices/stock/specs if not present in context
+- If context is not enough, say you don't have accurate info in the system and suggest contacting support
+- Do not use Markdown formatting (no **bold**, headings, tables). Use plain text.
+
+RESPONSE FORMAT WHEN SUGGESTING PRODUCTS:
+1. Always start with a greeting and brief introduction
+2. Analyze and advise based on customer's request
+3. List detailed info of the most relevant product
+4. If multiple products, suggest additional options
+5. Always end with "Suggested products:" (no exclamation or other characters)
+6. Then leave one blank line, the system will render product cards
+Example format:
+"Hello, I am the AI assistant from Phonify, happy to assist you.
+Based on your budget of around 15 million VND for a Samsung phone, the closest product we have is the Samsung Galaxy S23.
+Here are the details of this product:
+Product Name: Samsung Galaxy S23
+Price: 16,990,000 VND
+Description: Samsung Galaxy S23 with Snapdragon 8 Gen 2, 50MP camera, and 3900mAh battery. 6.1 inch Dynamic AMOLED 2X display.
+Stock: 65 units available
+Additionally, if you want to check out Samsung products under 15 million VND, we also have:
+1. Samsung Galaxy S21 FE
+    - Price: 11,990,000 VND
+    - Description: Samsung Galaxy S21 FE with Snapdragon 888, 64MP camera, and 4500mAh battery. 6.4 inch Dynamic AMOLED 2X display.
+    - Stock: 75 units available
+Are you interested in the Samsung Galaxy S23 or any other products?
+Suggested products:"
+Always respond concisely, clearly, and friendly, prioritizing data accuracy over style."""
+
+def detect_lang(text: str) -> str:
+    t = (text or "").lower()
+    # Vietnamese characters
+    vi_chars = re.compile(r"[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]", re.I)
+    if vi_chars.search(t):
+        return "vi"
+    # Vietnamese keywords
+    vi_keywords = re.compile(
+        r"\b(tu van|tuvan|goi y|gia|trieu|nghin|vnd|dong|dien thoai|"
+        r"tai nghe|laptop|man hinh|pin|camera|bao hanh|doi tra|khuyen mai|mua|san pham)\b",
+        re.I
+    )
+    if vi_keywords.search(t):
+        return "vi"
+    return "en"
+def t(lang: str, vi: str, en: str) -> str:
+    return vi if lang == "vi" else en
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
@@ -96,6 +148,7 @@ class ChatRequest(BaseModel):
     message: str
     conversationHistory: Optional[List[Message]] = []
     backendUrl: Optional[str] = None
+    language: Optional[str] = None  # "vi" | "en"
 
 class ChatResponse(BaseModel):
     success: bool
@@ -388,6 +441,10 @@ async def chat(request: ChatRequest):
             raise HTTPException(status_code=500, detail="GEMINI_API_KEY chưa được cấu hình")
         
         backend_url = request.backendUrl or BACKEND_URL
+        
+        lang = (request.language or "").strip().lower()
+        if lang not in ("vi", "en"):
+            lang = detect_lang(request.message)
 
         print(f"[CHAT] Using model: {GEMINI_MODEL}")
         print(f"[RAG] Starting RAG pipeline for: \"{request.message}\"")
@@ -405,7 +462,7 @@ async def chat(request: ChatRequest):
             print(f"[PURCHASE] Brand '{phone_model}' detected but no price info - asking for price")
 
             # Tạo câu hỏi phù hợp với brand
-            brand_responses = {
+            brand_responses_vi = {
                 "iphone": "Dạ, iPhone hiện có nhiều mẫu từ phổ thông đến cao cấp. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhất nhé?",
                 "samsung": "Dạ, Samsung có nhiều dòng như A, S và Z với mức giá khác nhau. Bạn đang tìm máy trong khoảng giá bao nhiêu để mình hỗ trợ chi tiết hơn ạ?",
                 "xiaomi": "Dạ có ạ, Xiaomi nổi bật về cấu hình mạnh trong tầm giá. Bạn cho mình biết ngân sách mong muốn để mình đề xuất mẫu phù hợp nhất nhé?",
@@ -413,13 +470,26 @@ async def chat(request: ChatRequest):
                 "vivo": "Dạ, Vivo dùng ổn định và pin tốt. Bạn đang quan tâm phân khúc giá nào để mình gợi ý sản phẩm phù hợp cho bạn nhé?",
                 "realme": "Dạ, Realme có nhiều mẫu hiệu năng cao tối ưu cho chơi game. Bạn cho mình biết ngân sách dự kiến để mình chọn máy có chip mạnh nhất cho bạn nhé?"
             }
-
-            response_text = brand_responses.get(phone_model.lower(),
-                f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhé?")
+            brand_responses_en = {
+                "iphone": "Sure! iPhone has many models from budget to premium. What’s your expected budget so I can recommend the best option?",
+                "samsung": "Sure! Samsung has A, S, and Z series across different price ranges. What budget range are you looking for?",
+                "xiaomi": "Sure! Xiaomi is great for strong specs at a good price. What’s your budget so I can suggest the best model?",
+                "oppo": "Sure! OPPO is strong on cameras and selfies. What price range do you want so I can advise more accurately?",
+                "vivo": "Sure! Vivo is stable and has good battery life. Which price segment are you considering?",
+                "realme": "Sure! Realme offers high performance (great for gaming) at many price points. What’s your budget so I can pick the strongest chipset in your range?"
+            }
+            brand_key = phone_model.lower()
+            fallback_vi = f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhé?"
+            fallback_en = f"Sure! {phone_model} has many models at different prices. What’s your budget so I can recommend the best option?"
+            response_text = (
+                brand_responses_vi.get(brand_key, fallback_vi)
+                if lang == "vi"
+                else brand_responses_en.get(brand_key, fallback_en) 
+            )
 
             return ChatResponse(
                 success=True,
-                message="Cần thêm thông tin giá để tư vấn",
+                message=t(lang,"Cần thêm thông tin giá để tư vấn","Need your budget to recommend accurately"),
                 data={
                     "response": response_text,
                     "products": [],
@@ -436,11 +506,15 @@ async def chat(request: ChatRequest):
         elif is_purchase_intent and not phone_model and not price_value:
             # Có ý định mua nhưng không có thông tin cụ thể, hỏi brand + giá
             print("[PURCHASE] Purchase intent but no specific brand/price info")
-            response_text = "Để tôi tư vấn chính xác hơn, bạn quan tâm đến dòng điện thoại nào và có khoảng giá bao nhiêu không?\n\nVí dụ: \"Tôi muốn mua iPhone dưới 20 triệu\" hoặc \"Tìm Samsung Galaxy khoảng 15 triệu\""
+            response_text = t(
+                lang,
+                'Để tôi tư vấn chính xác hơn, bạn quan tâm đến dòng điện thoại nào và có khoảng giá bao nhiêu không?\n\nVí dụ: "Tôi muốn mua iPhone dưới 20 triệu" hoặc "Tìm Samsung Galaxy khoảng 15 triệu"',
+                'To advise more accurately, which phone brand/model are you interested in and what is your budget range?\n\nExamples: "I want an iPhone under 20 million VND" or "Find a Samsung Galaxy around 15 million VND".'
+            )
 
             return ChatResponse(
                 success=True,
-                message="Cần thêm thông tin để tư vấn",
+                message=t(lang,"Cần thêm thông tin để tư vấn","Need more information to advise"),
                 data={
                     "response": response_text,
                     "products": [],
@@ -454,16 +528,17 @@ async def chat(request: ChatRequest):
         model_name = GEMINI_MODEL
         if not model_name.startswith("models/"):
             model_name = f"models/{model_name}"
+        system_prompt = SYSTEM_PROMPT if lang == "vi" else SYSTEM_PROMPT_EN
         
         try:
             model = genai.GenerativeModel(
                 model_name=model_name,
-                system_instruction=SYSTEM_PROMPT
+                system_instruction=system_prompt
             )
         except TypeError:
             model = genai.GenerativeModel(
                 GEMINI_MODEL,
-                system_instruction=SYSTEM_PROMPT
+                system_instruction=system_prompt
             )
         
         history = build_history(request.conversationHistory)
@@ -674,7 +749,7 @@ async def chat(request: ChatRequest):
             and phone_model.lower() in available_brands
             and not (price_condition or price_value)  # chỉ hỏi lại giá nếu user chưa cung cấp
         ):
-            brand_prompts = {
+            brand_prompts_vi = {
                 "iphone": "Dạ, iPhone hiện có nhiều mẫu từ phổ thông đến cao cấp. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhất nhé?",
                 "samsung": "Dạ, Samsung có nhiều dòng như A, S và Z với mức giá khác nhau. Bạn đang tìm máy trong khoảng giá bao nhiêu để mình hỗ trợ chi tiết hơn ạ?",
                 "xiaomi": "Dạ có ạ, Xiaomi nổi bật về cấu hình mạnh trong tầm giá. Bạn cho mình biết ngân sách mong muốn để mình đề xuất mẫu phù hợp nhất nhé?",
@@ -682,11 +757,24 @@ async def chat(request: ChatRequest):
                 "vivo": "Dạ, Vivo dùng ổn định và pin tốt. Bạn đang quan tâm phân khúc giá nào để mình gợi ý sản phẩm phù hợp cho bạn nhé?",
                 "realme": "Dạ, Realme có nhiều mẫu hiệu năng cao tối ưu cho chơi game. Bạn cho mình biết ngân sách dự kiến để mình chọn máy có chip mạnh nhất cho bạn nhé?"
             }
-            response_text = brand_prompts.get(phone_model.lower(),
-                f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhé?")
+            brand_prompts_en = {
+                "iphone": "Sure! iPhone has many models from budget to premium. What’s your expected budget so I can recommend the best option?",
+                "samsung": "Sure! Samsung has A, S, and Z series across different price ranges. What budget range are you looking for?",
+                "xiaomi": "Sure! Xiaomi is great for strong specs at a good price. What’s your budget so I can suggest the best model?",
+                "oppo": "Sure! OPPO is strong on cameras and selfies. What price range do you want so I can advise more accurately?",
+                "vivo": "Sure! Vivo is stable and has good battery life. Which price segment are you considering?",
+                "realme": "Sure! Realme offers high performance (great for gaming) at many price points. What’s your budget so I can pick the strongest chipset in your range?"
+            }
+            fallback_vi = f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhé?"
+            fallback_en = f"Sure! {phone_model} has many models at different prices. What’s your budget so I can recommend the best option?"
+            response_text = (
+                brand_prompts_vi.get(phone_model.lower(), fallback_vi)
+                if lang == "vi"
+                else brand_prompts_en.get(phone_model.lower(), fallback_en)
+            )   
             return ChatResponse(
                 success=True,
-                message="Cần thêm thông tin giá để tư vấn",
+                message=t(lang, "Cần thêm thông tin giá để tư vấn", "Need more information about price to advise"),
                 data={
                     "response": response_text,
                     "products": [],
@@ -704,8 +792,12 @@ async def chat(request: ChatRequest):
                 if not price_desc:
                     price_desc = "với mức giá bạn yêu cầu"
 
-            brand_display = format_brand_display(phone_model) if phone_model else "đó"
-            response_text = f"Hiện tại, trong hệ thống dữ liệu của tôi không có thông tin chính xác về các mẫu điện thoại {brand_display} {price_desc}. Thương hiệu này có thể chưa được cập nhật trong danh sách sản phẩm hiện tại của chúng tôi.\n\nNếu bạn quan tâm đến các sản phẩm này, xin vui lòng liên hệ trực tiếp với bộ phận Chăm sóc khách hàng của Phonify để được hỗ trợ kiểm tra tồn kho mới nhất và thông tin chi tiết về sản phẩm."
+            brand_display = format_brand_display(phone_model) if phone_model else t(lang, "đó", "that")
+            response_text = t(
+                lang,
+                f"Hiện tại, trong hệ thống dữ liệu của tôi không có thông tin chính xác về các mẫu điện thoại {brand_display} {price_desc}. Thương hiệu này có thể chưa được cập nhật trong danh sách sản phẩm hiện tại của chúng tôi.\n\nNếu bạn quan tâm đến các sản phẩm này, xin vui lòng liên hệ trực tiếp với bộ phận Chăm sóc khách hàng của Phonify để được hỗ trợ kiểm tra tồn kho mới nhất và thông tin chi tiết về sản phẩm.",
+                f"At the moment, I don’t have accurate information in our system about {brand_display} phones {price_desc}. This brand may not be available in our current product list.\n\nIf you’re interested, please contact Phonify Customer Support to check the latest stock and product details."
+            )
             response_type = "text"
             print(f"[CHAT] Specific brand '{phone_model or 'unknown'}' requested but no products found, returning text only")
         else:
@@ -732,12 +824,20 @@ async def chat(request: ChatRequest):
                 # Tạo response text dựa trên products thực tế
                 brand_text = detected_brand or "điện thoại"
                 brand_text_display = format_brand_display(brand_text)
-                lines = [f"Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.\n"]
-
+                lines = [t(lang,
+                    "Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.\n",
+                    "Hello! I'm Phonify's AI assistant. Happy to help you.\n"
+                )]
                 if len(products) == 1:
-                    lines.append(f"Tôi tìm thấy 1 sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:")
+                    lines.append(t(lang,
+                        f"Tôi tìm thấy 1 sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
+                        f"I found 1 {brand_text_display}{price_desc} product that matches your request:"
+                    ))
                 else:
-                    lines.append(f"Tôi tìm thấy {len(products)} sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:")
+                    lines.append(t(lang,
+                        f"Tôi tìm thấy {len(products)} sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
+                        f"I found {len(products)} {brand_text_display}{price_desc} products that match your request:"
+                    ))
 
                 # Thêm thông tin sản phẩm chính
                 main_product = products[0]
@@ -745,20 +845,34 @@ async def chat(request: ChatRequest):
                 price_val = main_product.get("price")
                 price_text = f"{int(price_val):,} VNĐ" if isinstance(price_val, (int, float)) else "Chưa có giá"
 
-                lines.append(f"\nThông tin chi tiết về sản phẩm phù hợp nhất:")
-                lines.append(f"Tên sản phẩm: {name}")
-                lines.append(f"Giá: {price_text}")
+                lines.append(t(lang,
+                    "\nThông tin chi tiết về sản phẩm phù hợp nhất:",
+                    "\nDetails of the most relevant product:"
+                ))
+                lines.append(t(lang, f"Tên sản phẩm: {name}", f"Product name: {name}"))
+                lines.append(t(lang, f"Giá: {price_text}", f"Price: {price_text}"))
+
 
                 if len(products) > 1:
-                    lines.append(f"\nNgoài ra, chúng tôi còn có thêm {len(products)-1} lựa chọn khác:")
+                    lines.append(t(lang,
+                        f"\nNgoài ra, chúng tôi còn có thêm {len(products)-1} lựa chọn khác:",
+                        f"\nAdditionally, we have {len(products)-1} more options:"
+                    ))
                     for idx, p in enumerate(products[1:], 1):
                         name = p.get("name") or "Sản phẩm"
                         price_val = p.get("price")
                         price_text = f"{int(price_val):,} VNĐ" if isinstance(price_val, (int, float)) else "Chưa có giá"
-                        lines.append(f"{idx}. {name} - {price_text}")
+                        lines.append(t(lang, f"{idx}. {name} - {price_text}", f"{idx}. {name} - {price_text}"))
 
-                lines.append(f"\nBạn quan tâm đến sản phẩm nào ạ?\n\nSản phẩm gợi ý:")
-                response_text = "\n".join(lines)
+                lines.append(t(lang,
+                    f"\nBạn quan tâm đến sản phẩm nào ạ?\n\nSản phẩm gợi ý:",
+                    f"\nWhich product are you interested in?\n\nRecommended products:"
+                ))
+                response_text = t(
+                    lang,
+                    f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} phù hợp trong hệ thống để gợi ý. Bạn có thể cung cấp thêm ngân sách hoặc thử từ khóa khác, hoặc liên hệ CSKH để được hỗ trợ nhanh nhất.",
+                    f"I couldn't find a matching {brand_text}{price_desc} product in our system right now. You can share your budget, try different keywords, or contact Customer Support for the fastest assistance."
+                )
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
             else:

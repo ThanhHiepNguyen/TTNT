@@ -14,10 +14,10 @@ app.use(
     origin: "http://localhost:5173",
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-session-id"],
   })
 );
-
+app.options(/.*/, cors());
 app.use(express.json());
 app.use(cookieParser());
 app.use("/api/v1/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
