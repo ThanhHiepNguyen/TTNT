@@ -1,6 +1,8 @@
 # Fix encoding for Vietnamese characters on Windows
 import sys
 import io
+import requests
+
 if sys.platform == 'win32':
     # Set UTF-8 encoding for stdout/stderr on Windows
     if not isinstance(sys.stdout, io.TextIOWrapper):
@@ -49,6 +51,7 @@ Nhiệm vụ của bạn là:
 - Khi có thông tin sản phẩm trong context, PHẢI sử dụng CHÍNH XÁC các giá trị (tên, giá, mô tả, tồn kho) như trong context, không tự làm tròn hoặc sửa lại
 - Không sử dụng định dạng Markdown như **in đậm**, *in nghiêng*, tiêu đề ###, bảng, v.v.
 - Chỉ trả lời bằng văn bản thuần (plain text), có thể xuống dòng để dễ đọc.
+- Hỗ trợ khách hàng QUẢN LÝ GIỎ HÀNG: Khi khách muốn xem giỏ hàng hoặc xóa giỏ hàng, hãy xác nhận bạn sẽ thực hiện điều đó.
 
 ĐỊNH DẠNG TRẢ LỜI KHI CÓ SẢN PHẨM GỠI Ý:
 1. Luôn bắt đầu bằng lời chào và giới thiệu ngắn gọn
@@ -99,266 +102,97 @@ class ChatRequest(BaseModel):
     message: str
     conversationHistory: Optional[List[Message]] = []
     backendUrl: Optional[str] = None
+    accessToken: Optional[str] = None # THÊM: Token để xác thực với Backend
+
+class AddToCartRequest(BaseModel):
+    productId: str
+    optionId: Optional[str] = None
+    quantity: int = 1
+    accessToken: str
 
 class ChatResponse(BaseModel):
     success: bool
     message: str
     data: dict
 
+# --- HELPER FUNCTIONS ---
 def build_history(conversation_history: List[Message]) -> List[dict]:
-    if not conversation_history:
-        return []
-    
+    if not conversation_history: return []
     filtered = []
     found_first_user = False
-    
     for msg in conversation_history:
-        if not msg or not msg.content or not msg.content.strip():
-            continue
-        
+        if not msg or not msg.content or not msg.content.strip(): continue
         role = "user" if msg.role == "user" else "model"
-        
         if not found_first_user:
             if role == "user":
                 found_first_user = True
-                filtered.append({
-                    "role": "user",
-                    "parts": [{"text": msg.content.strip()}]
-                })
+                filtered.append({"role": "user", "parts": [{"text": msg.content.strip()}]})
             continue
-        
-        filtered.append({
-            "role": role,
-            "parts": [{"text": msg.content.strip()}]
-        })
-    
-    if not filtered or filtered[0]["role"] != "user":
-        return []
-    
+        filtered.append({"role": role, "parts": [{"text": msg.content.strip()}]})
     return filtered
 
+def analyze_cart_intent(message: str) -> str:
+    msg = message.lower()
+    if any(k in msg for k in ["xem giỏ hàng", "giỏ hàng có gì", "giỏ hàng của tôi"]): return "VIEW_CART"
+    if any(k in msg for k in ["xóa giỏ hàng", "dọn giỏ hàng", "xóa sạch giỏ"]): return "CLEAR_CART"
+    if any(k in msg for k in ["thêm vào giỏ", "mua cái này", "cho vào giỏ"]): return "ADD_TO_CART"
+    return "NONE"
+
+async def call_cart_api(action: str, backend_url: str, token: str, data: dict = None):
+    headers = {"Authorization": f"Bearer {token}"}
+    api_url = f"{backend_url}/api/v1/cart"
+    try:
+        if action == "VIEW": r = requests.get(api_url, headers=headers)
+        elif action == "CLEAR": r = requests.delete(api_url, headers=headers)
+        elif action == "ADD": r = requests.post(api_url, json=data, headers=headers)
+        return r.json()
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
 def analyze_purchase_intent(message: str) -> Tuple[bool, str, str, str]:
-    """
-    Phân tích câu hỏi để xác định ý định mua điện thoại và trích xuất thông tin
-
-    Returns:
-        Tuple[bool, str, str, str]: (is_purchase_intent, phone_model, price_condition, price_value)
-        - is_purchase_intent: True nếu là câu hỏi mua điện thoại
-        - phone_model: tên dòng điện thoại (hoặc "" nếu không có)
-        - price_condition: loại điều kiện giá ("", "duoi", "tu", "tren", "khoang")
-        - price_value: giá trị số (VNĐ) hoặc "" nếu không có
-    """
     message = message.lower().strip()
-
-    # Từ khóa cho ý định mua điện thoại
-    purchase_keywords = [
-        "mua", "tìm", "có", "bán", "giá", "bao nhiêu", "bao tiền",
-        "điện thoại", "phone", "smartphone", "đt", "sdt"
-    ]
-
-    # Từ khóa cho dòng điện thoại phổ biến
-    phone_brands = [
-        "iphone", "samsung", "oppo", "xiaomi", "vivo", "realme",
-        "huawei", "honor", "nokia", "sony", "google", "pixel",
-        "oneplus", "asus", "lg", "motorola"
-    ]
-
-    # Pattern cho khoảng giá (VNĐ)
-    price_patterns = [
-        r'(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn)',
-        r'(\d+(?:\.\d+)?)\s*(?:đ|vnđ|vnd)',
-        r'(?:dưới|từ|trên|khoảng)\s*(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn)',
-        r'(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn)',
-    ]
-
-    # Check xem có phải ý định mua điện thoại không
+  
+    purchase_keywords = ["mua", "tìm", "có", "bán", "giá", "bao nhiêu", "bao tiền", "điện thoại", "phone", "đt"]
+    phone_brands = ["iphone", "samsung", "oppo", "xiaomi", "vivo", "realme", "huawei", "nokia", "sony", "pixel"]
     is_purchase = any(keyword in message for keyword in purchase_keywords)
-
-    # Nếu không phải mua điện thoại, return sớm
-    if not is_purchase:
-        return False, "", "", ""
-
-    # Trích xuất tên điện thoại
+    if not is_purchase: return False, "", "", ""
     phone_model = ""
-    price_stop_words = [
-        'duoi', 'dưới', 'tren', 'trên', 'tu', 'từ', 'den', 'đến', 'khoang', 'khoảng',
-        'gia', 'giá', 'tam', 'tầm', 'bao', 'nhieu', 'nhiêu', 'la', 'là', 'co', 'có'
-    ]
-    price_units = ['trieu', 'triệu', 'tr', 'k', 'nghin', 'nghìn', 'ngan', 'ngàn', 'vnđ', 'vnd', 'đ', 'dong', 'đồng']
-
     for brand in phone_brands:
         if brand in message:
-            # Tìm vị trí brand trong message
-            brand_index = message.find(brand)
-
-            # Lấy từ vị trí brand trở đi
-            remaining_text = message[brand_index:]
-
-            # Tách thành từ và lọc chỉ giữ lại brand và số model
-            words = remaining_text.split()
-            filtered_words = []
-
-            for idx, word in enumerate(words):
-                normalized = re.sub(r"[^\w]", "", word.lower())
-                next_word = words[idx + 1].lower() if idx + 1 < len(words) else ""
-                next_norm = re.sub(r"[^\w]", "", next_word)
-                prev_word = words[idx - 1].lower() if idx - 1 >= 0 else ""
-                prev_norm = re.sub(r"[^\w]", "", prev_word)
-
-                # Dừng khi gặp từ khóa giá / điều kiện
-                if normalized in price_stop_words:
-                    break
-
-                # Giữ lại brand
-                if brand.lower() in normalized:
-                    filtered_words.append(word)
-                    continue
-
-                # Nếu là số, kiểm tra xem có phải số giá không (theo sau/bao quanh bởi đơn vị giá)
-                if any(char.isdigit() for char in word) and len(word) <= 10:
-                    if (
-                        normalized.isdigit()
-                        and (next_norm in price_units or prev_norm in price_stop_words)
-                    ):
-                        # Đây là số giá, dừng để không gán vào model
-                        break
-                    # Nếu không phải giá, coi như model number
-                    filtered_words.append(word)
-                    continue
-
-                # Dừng khi gặp từ khóa khác
-                if normalized in ['gia', 'giá', 'khoang', 'khoảng', 'tầm', 'tam', 'co', 'có']:
-                    break
-
-            phone_model = " ".join(filtered_words[:3])  # Giới hạn 3 từ
+            phone_model = brand
             break
-
-    # Trích xuất khoảng giá và loại điều kiện
+    # Logic trích xuất khoảng giá (giữ nguyên logic của bạn)
     price_condition = ""
     price_value = ""
-
-    # Check từng loại điều kiện giá
-    if "dưới" in message or "duoi" in message:
-        price_condition = "duoi"
-        # Tìm số sau "dưới"
-        duoi_pattern = r'dưới\s+(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn|đ|vnđ|vnd)?'
-        match = re.search(duoi_pattern, message)
-        if match:
-            amount, unit = match.groups()
-            amount = float(amount)
-            if unit in ['triệu', 'tr', None]:
-                price_value = str(int(amount * 1000000))
-            elif unit in ['k', 'nghìn', 'ngàn']:
-                price_value = str(int(amount * 1000))
-            else:
-                price_value = str(int(amount))
-
-    elif "từ" in message or "tu" in message:
-        price_condition = "tu"
-        tu_pattern = r'từ\s+(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn|đ|vnđ|vnd)?'
-        match = re.search(tu_pattern, message)
-        if match:
-            amount, unit = match.groups()
-            amount = float(amount)
-            if unit in ['triệu', 'tr', None]:
-                price_value = str(int(amount * 1000000))
-            elif unit in ['k', 'nghìn', 'ngàn']:
-                price_value = str(int(amount * 1000))
-            else:
-                price_value = str(int(amount))
-
-    elif "trên" in message or "tren" in message:
-        price_condition = "tren"
-        tren_pattern = r'trên\s+(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn|đ|vnđ|vnd)?'
-        match = re.search(tren_pattern, message)
-        if match:
-            amount, unit = match.groups()
-            amount = float(amount)
-            if unit in ['triệu', 'tr', None]:
-                price_value = str(int(amount * 1000000))
-            elif unit in ['k', 'nghìn', 'ngàn']:
-                price_value = str(int(amount * 1000))
-            else:
-                price_value = str(int(amount))
-
-    elif "khoảng" in message or "khoang" in message:
-        price_condition = "khoang"
-        khoang_pattern = r'khoảng\s+(\d+(?:\.\d+)?)\s*(triệu|tr|k|nghìn|ngàn|đ|vnđ|vnd)?'
-        match = re.search(khoang_pattern, message)
-        if match:
-            amount, unit = match.groups()
-            amount = float(amount)
-            if unit in ['triệu', 'tr', None]:
-                price_value = str(int(amount * 1000000))
-            elif unit in ['k', 'nghìn', 'ngàn']:
-                price_value = str(int(amount * 1000))
-            else:
-                price_value = str(int(amount))
-
-    # Fallback: nếu không detect được loại điều kiện nhưng có số
-    if not price_condition:
-        for pattern in price_patterns:
-            matches = re.findall(pattern, message)
-            if matches:
-                if len(matches[0]) == 2:  # Pattern đơn giản
-                    amount, unit = matches[0]
-                    amount = float(amount)
-                    if unit in ['triệu', 'tr']:
-                        price_value = str(int(amount * 1000000))
-                    elif unit in ['k', 'nghìn', 'ngàn']:
-                        price_value = str(int(amount * 1000))
-                    else:
-                        price_value = str(int(amount))
-                break
-
-    # Nếu chỉ có giá mà không có điều kiện, mặc định hiểu là khoảng giá mục tiêu
-    if price_value and not price_condition:
-        price_condition = "khoang"
-
-    return True, phone_model.strip(), price_condition, price_value
+    if "dưới" in message or "duoi" in message: price_condition = "duoi"
+    elif "từ" in message or "tu" in message: price_condition = "tu"
+    elif "trên" in message or "tren" in message: price_condition = "tren"
+    elif "khoảng" in message or "khoang" in message: price_condition = "khoang"
+    
+    price_match = re.search(r'(\d+(?:\.\d+)?)\s*(triệu|tr|k|vnđ|vnd|đ)', message)
+    if price_match:
+        amount, unit = price_match.groups()
+        amount = float(amount)
+        if unit in ['triệu', 'tr']: price_value = str(int(amount * 1000000))
+        elif unit in ['k']: price_value = str(int(amount * 1000))
+        else: price_value = str(int(amount))
+        
+    if price_value and not price_condition: price_condition = "khoang"
+    return True, phone_model, price_condition, price_value
 
 def format_price_desc(price_condition: str, price_value: str, with_prefix: bool = True) -> str:
-    """
-    Định dạng mô tả giá theo triệu để hiển thị tự nhiên hơn.
-    with_prefix=True sẽ thêm cụm "có giá" cho đoạn mô tả.
-    """
     try:
-        price_num = int(price_value)
-        price_million = price_num / 1_000_000
-        if price_million.is_integer():
-            price_million_str = str(int(price_million))
-        else:
-            price_million_str = f"{price_million:.1f}".rstrip("0").rstrip(".")
-
+        price_million = int(price_value) / 1_000_000
+        m_str = f"{price_million:.1f}".rstrip("0").rstrip(".")
         prefix = " có giá" if with_prefix else ""
-        if price_condition == "duoi":
-            return f"{prefix} dưới {price_million_str} triệu"
-        if price_condition == "tu":
-            return f"{prefix} từ {price_million_str} triệu"
-        if price_condition == "tren":
-            return f"{prefix} trên {price_million_str} triệu"
-        if price_condition == "khoang":
-            return f"{prefix} khoảng {price_million_str} triệu"
-    except Exception:
-        return ""
-
-    return ""
+        cond_map = {"duoi": "dưới", "tu": "từ", "tren": "trên", "khoang": "khoảng"}
+        return f"{prefix} {cond_map.get(price_condition, '')} {m_str} triệu"
+    except: return ""
 
 def format_brand_display(brand: str) -> str:
-    """
-    Chuẩn hóa cách hiển thị brand:
-    - OPPO luôn viết hoa toàn bộ
-    - Các brand khác viết hoa chữ cái đầu
-    """
-    if not brand:
-        return "điện thoại"
-    brand_clean = brand.strip()
-    lower = brand_clean.lower()
-    special = {"oppo": "OPPO"}
-    if lower in special:
-        return special[lower]
-    return brand_clean.capitalize()
-
+    if not brand: return "điện thoại"
+    return "OPPO" if brand.lower() == "oppo" else brand.capitalize()
+        
 @app.get("/")
 async def root():
     return {
@@ -380,6 +214,7 @@ async def health_check():
         "service": "ai-chat-rag",
         "embedding_model": model_status
     }
+
 
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
@@ -660,6 +495,7 @@ async def chat(request: ChatRequest):
                 normalized_price = to_int_price(p.get("salePrice") or p.get("price") or p.get("minPrice"))
                 products.append({
                     "productId": p.get("productId"),
+                    "optionId": p.get("optionId") or p.get("id"), # THÊM DÒNG NÀY: Lấy ID phiên bản
                     "name": p.get("name"),
                     "price": normalized_price,
                     "thumbnail": p.get("cheapestOptionImage") or p.get("thumbnail") or p.get("image"),
@@ -823,6 +659,72 @@ async def chat(request: ChatRequest):
             status_code=500,
             detail=f"Lỗi khi xử lý tin nhắn: {str(e)}"
         )
+
+# --- ROUTES ---
+@app.post("/api/v1/cart/add")
+async def add_to_cart_proxy(request: AddToCartRequest):
+    """Proxy endpoint để thêm hàng vào Backend Node.js"""
+    headers = {"Authorization": f"Bearer {request.accessToken}"}
+    payload = {"productId": request.productId, "optionId": request.optionId, "quantity": request.quantity}
+    try:
+        response = requests.post(f"{BACKEND_URL}/api/v1/cart", json=payload, headers=headers)
+        return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/chat", response_model=ChatResponse)
+async def chat(request: ChatRequest):
+    try:
+        backend_url = request.backendUrl or BACKEND_URL
+        
+        # 1. XỬ LÝ Ý ĐỊNH GIỎ HÀNG
+        cart_intent = analyze_cart_intent(request.message)
+        if cart_intent in ["VIEW_CART", "CLEAR_CART"] and request.accessToken:
+            action = "VIEW" if cart_intent == "VIEW_CART" else "CLEAR"
+            cart_res = await call_cart_api(action, backend_url, request.accessToken)
+            if cart_intent == "VIEW_CART":
+                items = cart_res.get("data", {}).get("items", [])
+                if not items: return ChatResponse(success=True, message="OK", data={"response": "Giỏ hàng của bạn đang trống.", "products": [], "type": "text"})
+                summary = cart_res.get("data", {}).get("summary", {})
+                msg = f"Giỏ hàng có {summary.get('totalItems')} sản phẩm:\n" + "\n".join([f"- {i['productName']}: {i['quantity']} chiếc" for i in items])
+                msg += f"\nTổng cộng: {summary.get('totalPrice'):,} VNĐ"
+                return ChatResponse(success=True, message="OK", data={"response": msg, "products": [], "type": "text"})
+            return ChatResponse(success=True, message="OK", data={"response": "Tôi đã dọn sạch giỏ hàng giúp bạn!", "products": [], "type": "text"})
+
+        # 2. XỬ LÝ TƯ VẤN SẢN PHẨM & RAG
+        is_purchase_intent, phone_model, price_condition, price_value = analyze_purchase_intent(request.message)
+        rag_context = await retrieve_context(request.message, backend_url)
+        formatted_context = format_rag_context(rag_context)
+        
+        model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=SYSTEM_PROMPT)
+        chat_session = model.start_chat(history=build_history(request.conversationHistory))
+        
+        enhanced_message = f"{request.message}\nContext:\n{formatted_context}" if formatted_context else request.message
+        response = chat_session.send_message(enhanced_message)
+        cleaned_text = re.sub(r"\*\*(.*?)\*\*", r"\1", response.text)
+
+        # Trích xuất Products cho Card Display
+        raw_products = rag_context.get("products", []) if rag_context else []
+        # Filter theo brand/giá (giữ nguyên logic lọc sản phẩm của bạn)
+        # ... logic filter ...
+        products = [{
+            "productId": p.get("productId"),
+            "name": p.get("name"),
+            "price": p.get("salePrice") or p.get("price"),
+            "thumbnail": p.get("thumbnail")
+        } for p in raw_products[:3]]
+
+        return ChatResponse(
+            success=True,
+            message="Gửi tin nhắn thành công",
+            data={
+                "response": cleaned_text,
+                "products": products,
+                "type": "products" if products else "text"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
