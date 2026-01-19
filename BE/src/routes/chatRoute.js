@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { chat } from "../controllers/Chat/chatController.js";
-
+import { createConversation, listConversations, getMessages } from "../controllers/Chat/chatHistoryController.js";
+import { getChatSuggestions } from "../controllers/Chat/chatSuggestionController.js";
+import { optionalAuthMiddleware } from "../middleware/auth.js";
 const router = Router();
+router.use(optionalAuthMiddleware);
 
 /**
  * @openapi
@@ -58,6 +61,10 @@ const router = Router();
  *         description: Server error
  */
 router.post("/", chat);
+router.get("/suggestions", getChatSuggestions);
+router.post("/conversations", createConversation);
+router.get("/conversations", listConversations);
+router.get("/conversations/:id/messages", getMessages);
 
 export default router;
 
