@@ -197,4 +197,46 @@ model Review {
   
   product   Product  @relation(fields: [productId], references: [productId])
   user      User     @relation(fields: [userId], references: [userId])
+ DUCNE
 }
+
+}
+
+enum ChatRole {
+  user
+  assistant
+  system
+}
+
+model ChatConversation {
+  conversationId String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String?  @db.ObjectId
+  sessionId      String?
+  title          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  messages       ChatMessage[]
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([updatedAt])
+}
+
+model ChatMessage {
+  messageId      String   @id @default(auto()) @map("_id") @db.ObjectId
+  conversationId String   @db.ObjectId
+  role           ChatRole
+  content        String
+  language       String?  // "vi" | "en"
+  intent         String?  // "product_advice" | "policy" | "clarify" | ...
+  isAmbiguous    Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  conversation   ChatConversation @relation(fields: [conversationId], references: [conversationId])
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([role])
+}
+ main

@@ -61,6 +61,24 @@ const AdminLayout = ({ children }) => {
             roles: ["ADMIN", "STAFF"],
         },
         {
+ DUCNE
+
+            title: "Chat Analytics",
+            path: "/admin/chat-analytics",
+            icon: (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 8v5l3 3M3 12a9 9 0 1018 0 9 9 0 10-18 0z"
+                    />
+                </svg>
+            ),
+            roles: ["ADMIN"],
+        },
+        {
+ main
             title: "Người dùng",
             path: "/admin/users",
             icon: (

@@ -21,6 +21,10 @@ import PaymentSuccess from "./pages/PaymentSuccess";
 import PaymentFailed from "./pages/PaymentFailed";
 import Payment from "./pages/Payment";
 import Account from "./pages/Account";
+ DUCNE
+
+import AdminChatAnalytics from "./pages/AdminChatAnalytics";
+ main
 
 function AppContent() {
   const location = useLocation();
@@ -52,6 +56,10 @@ function AppContent() {
           <Route path="/payment/failed" element={<PaymentFailed />} />
           <Route path="/payment/:orderId" element={<Payment />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+ DUCNE
+
+          <Route path="/admin/chat-analytics" element={<AdminChatAnalytics />} />
+ main
         </Routes>
       </main>
       {shouldShowFooter && <Footer />}

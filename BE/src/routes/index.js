@@ -8,6 +8,8 @@ import reviewRouter from "./reviewRoute.js";
 import paymentRouter from "./paymentRoute.js";
 import chatRouter from "./chatRoute.js";
 import { sendResponse } from "../utils/response.js";
+import chatAnalyticsRouter from "./chatAnalyticsRoute.js";
+ main
 
 const router = Router();
 
@@ -34,6 +36,8 @@ router.use("/orders", orderRouter);
 router.use("/reviews", reviewRouter);
 router.use("/payment", paymentRouter);
 router.use("/chat", chatRouter);
+router.use("/admin", chatAnalyticsRouter);
+main
 
 import internalRouter from "./internalRoute.js";
 router.use("/internal", internalRouter);
