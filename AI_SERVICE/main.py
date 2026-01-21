@@ -111,6 +111,7 @@ if GEMINI_API_KEY:
 # ================== PROMPTS ==================
 SYSTEM_PROMPT = """Bạn là trợ lý AI mua sắm chuyên nghiệp của cửa hàng Phonify.
 - Chỉ sử dụng dữ liệu có trong CONTEXT (database) để trả lời.
+- Trả lời các câu hỏi về CHÍNH SÁCH, BẢO HÀNH, ĐỔI TRẢ dựa trên dữ liệu [QUY ĐỊNH CỬA HÀNG TỪ PDF] trong context.
 - Tuyệt đối không tự bịa đặt giá cả, tồn kho hay thông số kỹ thuật.
 - Nếu không thấy sản phẩm trong dữ liệu, hãy xin lỗi và báo là chưa cập nhật thông tin.
 - Luôn sử dụng icon (emojis) để câu trả lời sinh động và dễ đọc.
@@ -462,7 +463,13 @@ async def chat(request: ChatRequest):
         print(f"[CHAT] Using model: {GEMINI_MODEL}")
         print(f"[RAG] Starting RAG pipeline for: \"{request.message}\"")
 
-        # Phân tích ý định mua điện thoại theo spec mới
+        # 1. Lấy context từ RAG sớm để kiểm tra xem có thông tin chính sách (PDF) không
+        rag_context = await retrieve_context(request.message, backend_url)
+        formatted_context = format_rag_context(rag_context)
+        # Kiểm tra nhanh xem trong context có dữ liệu chính sách từ PDF không
+        has_policies = rag_context.get("policies") and len(rag_context["policies"]) > 0
+
+        # 2. Phân tích ý định mua điện thoại
         is_purchase_intent, phone_model, price_condition, price_value = analyze_purchase_intent(request.message)
         print(f"[CHAT] Analysis result: phone_model='{phone_model}', price_condition='{price_condition}', price_value='{price_value}'")
 
@@ -470,11 +477,10 @@ async def chat(request: ChatRequest):
         brands_not_in_system = ["oneplus", "nokia", "huawei", "motorola", "lg", "asus", "honor", "sony", "google", "pixel"]
         has_unavailable_brand_request = any(brand in request.message.lower() for brand in brands_not_in_system)
 
-        # Logic theo spec: Brand cụ thể mà KHÔNG có điều kiện giá → hỏi thêm về giá
-        if is_purchase_intent and phone_model and not price_condition and not price_value:
-            print(f"[PURCHASE] Brand '{phone_model}' detected but no price info - asking for price")
+        # 3. Logic xử lý: Chỉ hỏi lại thông tin mua sắm NẾU không tìm thấy chính sách liên quan trong PDF
+        if is_purchase_intent and phone_model and not price_condition and not price_value and not has_policies:
+            print(f"[PURCHASE] Brand '{phone_model}' detected, no price info, and NO policies found - asking for price")
 
-            # Tạo câu hỏi phù hợp với brand
             brand_responses_vi = {
                 "iphone": "Dạ, iPhone hiện có nhiều mẫu từ phổ thông đến cao cấp. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhất nhé?",
                 "samsung": "Dạ, Samsung có nhiều dòng như A, S và Z với mức giá khác nhau. Bạn đang tìm máy trong khoảng giá bao nhiêu để mình hỗ trợ chi tiết hơn ạ?",
@@ -492,51 +498,32 @@ async def chat(request: ChatRequest):
                 "realme": "Sure! Realme offers high performance (great for gaming) at many price points. What’s your budget so I can pick the strongest chipset in your range?"
             }
             brand_key = phone_model.lower()
-            fallback_vi = f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau. Bạn cho mình biết ngân sách dự kiến để mình tư vấn model phù hợp nhé?"
-            fallback_en = f"Sure! {phone_model} has many models at different prices. What’s your budget so I can recommend the best option?"
-            response_text = (
-                brand_responses_vi.get(brand_key, fallback_vi)
-                if lang == "vi"
-                else brand_responses_en.get(brand_key, fallback_en) 
-            )
+            response_text = brand_responses_vi.get(brand_key, f"Dạ, {phone_model} có nhiều mẫu với mức giá khác nhau...") if lang == "vi" else brand_responses_en.get(brand_key, f"Sure! {phone_model} has many models...")
 
             return ChatResponse(
                 success=True,
                 message=t(lang,"Cần thêm thông tin giá để tư vấn","Need your budget to recommend accurately"),
-                data={
-                    "response": response_text,
-                    "products": [],
-                    "type": "text"
-                }
+                data={"response": response_text, "products": [], "type": "text"}
             )
 
-        # Brand + giá cụ thể → tìm products
+        # Brand + giá cụ thể → để nó chạy xuống phần RAG search bên dưới
         elif is_purchase_intent and phone_model and (price_condition or price_value):
-            print(f"[PURCHASE] Brand '{phone_model}' + price detected - searching products")
-            # Tiếp tục với RAG search
             pass
 
-        elif is_purchase_intent and not phone_model and not price_value:
-            # Có ý định mua nhưng không có thông tin cụ thể, hỏi brand + giá
-            print("[PURCHASE] Purchase intent but no specific brand/price info")
+        # Mua chung chung nhưng KHÔNG có chính sách nào khớp: Hỏi lại brand/giá
+        elif is_purchase_intent and not phone_model and not price_value and not has_policies:
+            print("[PURCHASE] Generic purchase intent but NO policies found")
             response_text = t(
                 lang,
-                'Để tôi tư vấn chính xác hơn, bạn quan tâm đến dòng điện thoại nào và có khoảng giá bao nhiêu không?\n\nVí dụ: "Tôi muốn mua iPhone dưới 20 triệu" hoặc "Tìm Samsung Galaxy khoảng 15 triệu"',
-                'To advise more accurately, which phone brand/model are you interested in and what is your budget range?\n\nExamples: "I want an iPhone under 20 million VND" or "Find a Samsung Galaxy around 15 million VND".'
+                'Để tôi tư vấn chính xác hơn, bạn quan tâm đến dòng điện thoại nào và có khoảng giá bao nhiêu không?',
+                'To advise more accurately, which phone brand/model are you interested in?'
             )
 
             return ChatResponse(
                 success=True,
                 message=t(lang,"Cần thêm thông tin để tư vấn","Need more information to advise"),
-                data={
-                    "response": response_text,
-                    "products": [],
-                    "type": "text"
-                }
+                data={"response": response_text, "products": [], "type": "text"}
             )
-        
-        rag_context = await retrieve_context(request.message, backend_url)
-        formatted_context = format_rag_context(rag_context)
         
         model_name = GEMINI_MODEL
         if not model_name.startswith("models/"):
@@ -815,6 +802,11 @@ async def chat(request: ChatRequest):
             print(f"[CHAT] Specific brand '{phone_model or 'unknown'}' requested but no products found, returning text only")
         else:
             # Logic xử lý response đồng bộ với products
+
+               # --- ĐOẠN TÍCH HỢP PDF ---
+            # Kiểm tra xem có dữ liệu chính sách từ RAG không
+            has_policies = rag_context.get("policies") if rag_context else None
+
             if products:
                 # Luôn tạo response text dựa trên products thực tế để đảm bảo đồng bộ
                 # Không dùng LLM response vì có thể không khớp với products đã filter
@@ -884,6 +876,11 @@ async def chat(request: ChatRequest):
                 response_text = "\n".join(lines)
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
+            # LOGIC QUAN TRỌNG: Nếu có Chính sách (PDF) nhưng không có sản phẩm
+            elif has_policies:
+                print(f"[CHAT] No products but found policies. Using Gemini's text response.")
+                response_text = cleaned_text
+                response_type = "text"
             else:
                 # Không có products: KHÔNG dùng LLM response để tránh trả thông tin không đồng bộ
                 price_desc = ""
