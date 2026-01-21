@@ -61,8 +61,6 @@ const AdminLayout = ({ children }) => {
             roles: ["ADMIN", "STAFF"],
         },
         {
- DUCNE
-
             title: "Chat Analytics",
             path: "/admin/chat-analytics",
             icon: (
@@ -78,7 +76,6 @@ const AdminLayout = ({ children }) => {
             roles: ["ADMIN"],
         },
         {
- main
             title: "Người dùng",
             path: "/admin/users",
             icon: (

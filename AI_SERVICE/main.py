@@ -2,7 +2,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Fix encoding for Vietnamese characters on Windows
 import sys
@@ -13,11 +13,6 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Tuple
-main
 import os
 import re
 from dotenv import load_dotenv
@@ -32,83 +27,26 @@ from rag_service import (
 
 load_dotenv()
 
-# ================== APP ==================
-app = FastAPI(
-    title="Phonify AI Shopping Assistant",
-    description="AI Chatbox + Shopping Assistant (Compare, Combo, Summary)",
-    version="3.0.0"
-from rag_service import retrieve_context, format_rag_context, get_products_from_backend
-
-load_dotenv()
-
 app = FastAPI(
     title="Phonify AI Chat Service",
     description="AI Chatbox service với RAG (Retrieval-Augmented Generation)",
     version="2.0.0"
- main
+
 )
 
 app.add_middleware(
     CORSMiddleware,
-
-    allow_origins=["http://localhost:5173", "http://localhost:8000"],
-  
     allow_origins=[
         "http://localhost:5173",
         "http://localhost:8000",
     ],
- main
+
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
-# ================== CONFIG ==================
-SYSTEM_PROMPT = """Bạn là một trợ lý AI thân thiện của cửa hàng điện thoại Phonify.
-Nhiệm vụ của bạn là:
-- Tư vấn sản phẩm điện thoại cho khách hàng dựa trên THÔNG TIN ĐƯỢC CUNG CẤP TRONG NGỮ CẢNH (CONTEXT) từ hệ thống
-- Trả lời câu hỏi về sản phẩm, giá cả, tồn kho
-- Hỗ trợ khách hàng một cách nhiệt tình và chuyên nghiệp
-- Sử dụng tiếng Việt để giao tiếp
-- KHÔNG ĐƯỢC TỰ BỊA RA giá, tồn kho, cấu hình hoặc tên sản phẩm nếu trong context không có
-- Nếu thông tin trong context KHÔNG ĐỦ để trả lời chính xác, hãy nói rõ là "hiện tại tôi không có thông tin chính xác trong hệ thống" và đề nghị khách liên hệ CSKH
-- Khi có thông tin sản phẩm trong context, PHẢI sử dụng CHÍNH XÁC các giá trị (tên, giá, mô tả, tồn kho) như trong context, không tự làm tròn hoặc sửa lại
-- Không sử dụng định dạng Markdown như **in đậm**, *in nghiêng*, tiêu đề ###, bảng, v.v.
-- Chỉ trả lời bằng văn bản thuần (plain text), có thể xuống dòng để dễ đọc.
-
-ĐỊNH DẠNG TRẢ LỜI KHI CÓ SẢN PHẨM GỠI Ý:
-1. Luôn bắt đầu bằng lời chào và giới thiệu ngắn gọn
-2. Phân tích và tư vấn dựa trên yêu cầu của khách hàng
-3. Liệt kê thông tin chi tiết sản phẩm phù hợp nhất
-4. Nếu có nhiều sản phẩm, gợi ý thêm các lựa chọn khác
-5. Luôn kết thúc bằng "Sản phẩm gợi ý:" (không có dấu chấm than hoặc ký tự khác)
-6. Sau đó để trống 1 dòng, hệ thống sẽ tự động hiển thị product cards
-
-Ví dụ format:
-"Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.
-
-Với mức giá khoảng 15 triệu đồng cho điện thoại Samsung, sản phẩm gần nhất mà cửa hàng hiện có là Samsung Galaxy S23.
-
-Thông tin chi tiết về sản phẩm này như sau:
-
-Tên sản phẩm: Samsung Galaxy S23
-Giá: 16,990,000 VNĐ
-Mô tả: Samsung Galaxy S23 với chip Snapdragon 8 Gen 2, camera 50MP và pin 3900mAh. Màn hình Dynamic AMOLED 2X 6.1 inch.
-Tồn kho: Còn 65 sản phẩm
-
-Ngoài ra, nếu bạn muốn tham khảo các sản phẩm Samsung có giá thấp hơn 15 triệu đồng, chúng tôi còn có:
-
-1. Samsung Galaxy S21 FE
-   - Giá: 11,990,000 VNĐ
-   - Mô tả: Samsung Galaxy S21 FE với chip Snapdragon 888, camera 64MP và pin 4500mAh. Màn hình Dynamic AMOLED 2X 6.4 inch.
-   - Tồn kho: Còn 75 sản phẩm
-
-Bạn quan tâm đến Samsung Galaxy S23 hay sản phẩm nào khác ạ?
-
-Sản phẩm gợi ý:"
-
-Luôn trả lời ngắn gọn, rõ ràng, thân thiện và ưu tiên độ chính xác của dữ liệu hơn là văn phong."""
 SYSTEM_PROMPT_EN = """You are a friendly AI assistant for the Phonify phone store.
 Your tasks are:
 - Advise customers on phone products based on the provided CONTEXT from the system
@@ -161,7 +99,6 @@ def detect_lang(text: str) -> str:
 def t(lang: str, vi: str, en: str) -> str:
     return vi if lang == "vi" else en
 
- main
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
@@ -213,7 +150,7 @@ Hãy giải thích tại sao Combo này lại cần thiết và giúp nâng cao 
 
 # ================== MODELS ==================
 
-main
+
 class Message(BaseModel):
     role: str
     content: str
@@ -224,7 +161,6 @@ class ChatRequest(BaseModel):
     backendUrl: Optional[str] = None
 
     language: Optional[str] = None  # "vi" | "en"
- main
 
 class ChatResponse(BaseModel):
     success: bool
@@ -232,122 +168,6 @@ class ChatResponse(BaseModel):
     data: dict
 
 # ================== HELPERS ==================
-def detect_intent(message: str) -> str:
-    msg = message.lower()
-    # Thêm "mô tả", "chi tiết" vào nhận diện SUMMARY
-    if any(k in msg for k in ["so sánh", "khác nhau", "nên mua cái nào", "hơn kém"]):
-        return "COMPARE"
-    if any(k in msg for k in ["combo", "mua kèm", "phụ kiện", "set"]):
-        return "COMBO"
-    if any(k in msg for k in ["tóm tắt", "review", "đánh giá", "đáng mua", "mô tả", "chi tiết", "thông số"]):
-        return "SUMMARY"
-    return "NORMAL"
-
-def normalize_products(raw_products: list) -> list:
-    products = []
-    for p in raw_products:
-        products.append({
-            "productId": p.get("productId"),
-            "name": p.get("name"),
-            "price": p.get("price", 0),
-            "category": p.get("category", "N/A"),
-            "description": p.get("description", ""),
-            "stockQuantity": p.get("stockQuantity", 0),
-            "thumbnail": p.get("thumbnail") or p.get("image")
-        })
-    return products
-
-def build_gemini_model():
-    # Sử dụng cách khai báo an toàn cho các phiên bản thư viện khác nhau
-    return genai.GenerativeModel(GEMINI_MODEL)
-
-# ================== ENDPOINT ==================
-@app.post("/api/v1/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    if not request.message.strip():
-        raise HTTPException(status_code=400, detail="Message rỗng")
-
-    backend_url = request.backendUrl or BACKEND_URL
-    intent = detect_intent(request.message)
-
-    # Lấy dữ liệu từ RAG (Database)
-    rag_context = await retrieve_context(request.message, backend_url)
-    raw_products = rag_context.get("products", [])
-    products = normalize_products(raw_products)
-    reviews = rag_context.get("reviews", [])
-    
-    # Định dạng context để đưa vào AI
-    formatted_context = format_rag_context(rag_context)
-
-    model = build_gemini_model()
-    chat_session = model.start_chat(history=[])
-
-    # ================== COMPARE ==================
-    if intent == "COMPARE" and len(products) >= 2:
-        prompt = f"{formatted_context}\n\n{COMPARE_PROMPT.format(products=products[:3])}"
-        response = chat_session.send_message(prompt)
-
-        return ChatResponse(
-            success=True,
-            message="So sánh sản phẩm",
-            data={
-                "type": "compare",
-                "response": response.text.strip(),
-                "products": products[:3]
-            }
-        )
-
-    # ================== SUMMARY (Mô tả nhanh) ==================
-    if intent == "SUMMARY" and products:
-        prompt = f"{formatted_context}\n\n{SUMMARY_PROMPT.format(product=products[0], reviews=reviews[:3])}"
-        response = chat_session.send_message(prompt)
-
-        return ChatResponse(
-            success=True,
-            message="Tóm tắt sản phẩm",
-            data={
-                "type": "summary",
-                "response": response.text.strip(),
-                "product": products[0]
-            }
-        )
-
-    # ================== COMBO ==================
-    if intent == "COMBO" and products:
-        accessories = await get_products_from_backend(backend_url, search_term="phụ kiện")
-        combo_products = normalize_products(accessories[:3])
-
-        prompt = f"{formatted_context}\n\n{COMBO_PROMPT.format(product=products[0])}"
-        response = chat_session.send_message(prompt)
-
-        return ChatResponse(
-            success=True,
-            message="Gợi ý combo",
-            data={
-                "type": "combo",
-                "response": response.text.strip(),
-                "product": products[0],
-                "comboProducts": combo_products
-            }
-        )
-
-    # ================== NORMAL (Hỏi đáp thông thường) ==================
-    prompt = f"{formatted_context}\n\nCâu hỏi của khách: {request.message}\n\nHãy trả lời dựa trên dữ liệu thực tế phía trên."
-    response = chat_session.send_message(prompt)
-
-    return ChatResponse(
-        success=True,
-        message="Trò chuyện AI",
-        data={
-            "type": "text",
-            "response": response.text.strip(),
-            "products": products[:3] if products else []
-        }
-    )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=AI_SERVICE_PORT)
 def build_history(conversation_history: List[Message]) -> List[dict]:
     if not conversation_history:
         return []
@@ -1061,11 +881,7 @@ async def chat(request: ChatRequest):
                     f"\nBạn quan tâm đến sản phẩm nào ạ?\n\nSản phẩm gợi ý:",
                     f"\nWhich product are you interested in?\n\nRecommended products:"
                 ))
-                response_text = t(
-                    lang,
-                    f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} phù hợp trong hệ thống để gợi ý. Bạn có thể cung cấp thêm ngân sách hoặc thử từ khóa khác, hoặc liên hệ CSKH để được hỗ trợ nhanh nhất.",
-                    f"I couldn't find a matching {brand_text}{price_desc} product in our system right now. You can share your budget, try different keywords, or contact Customer Support for the fastest assistance."
-                )
+                response_text = "\n".join(lines)
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
             else:
@@ -1121,4 +937,4 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=AI_SERVICE_PORT)
 
- main
+

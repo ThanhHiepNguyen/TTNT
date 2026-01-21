@@ -55,11 +55,15 @@ const ProductDetail = () => {
             if (response?.product) {
                 setProduct(response.product);
                 if (response.product.options && response.product.options.length > 0) {
-                    const firstOption = response.product.options[0];
-                    setSelectedOption(firstOption);
-                    setSelectedColor(firstOption.color);
-                    setSelectedVersion(firstOption.version);
-                    setSelectedImage(firstOption.image || response.product.thumbnail);
+                    const cheapestOption = response.product.options.reduce((best, opt) => {
+                        const bestPrice = (best.salePrice ?? best.price ?? Number.MAX_SAFE_INTEGER);
+                        const optPrice = (opt.salePrice ?? opt.price ?? Number.MAX_SAFE_INTEGER);
+                        return optPrice < bestPrice ? opt : best;
+                    }, response.product.options[0]);
+                    setSelectedOption(cheapestOption);
+                    setSelectedColor(cheapestOption.color);
+                    setSelectedVersion(cheapestOption.version);
+                    setSelectedImage(cheapestOption.image || response.product.thumbnail);
                 }
 
                 if (response.product.categoryId) {
@@ -77,7 +81,7 @@ const ProductDetail = () => {
         try {
             const response = await categoryService.getCategoryById(categoryId, {
                 page: 1,
-                limit: 50, // Fetch nhiều sản phẩm để có thể scroll
+                limit: 50,
             });
             if (response?.products) {
                 const filtered = response.products.filter(p => p.productId !== productId);

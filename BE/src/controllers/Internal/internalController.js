@@ -5,51 +5,30 @@ export const getProductsForAI = async (req, res) => {
     try {
         const { search } = req.query;
         const searchTerm = search?.trim().toLowerCase() || "";
- DUCNE
-
-        let whereCondition = {};
-
-
         console.log(`[INTERNAL] getProductsForAI called with search: '${searchTerm}'`);
 
-        let whereCondition = {};
-
-        // ISSUE: Không có filter khi searchTerm rỗng, trả về tất cả products
- main
-        if (searchTerm) {
-            whereCondition = {
+        const whereCondition = searchTerm
+            ? {
                 OR: [
                     { name: { contains: searchTerm, mode: "insensitive" } },
                     { description: { contains: searchTerm, mode: "insensitive" } },
- DUCNE
+                    { category: { name: { contains: searchTerm, mode: "insensitive" } } },
                 ],
-            };
+            }
+            : {};
+
+        const limit = searchTerm ? 10 : 50;
+        if (!searchTerm) {
+            console.log("[INTERNAL] No search term, returning limited products for vector search");
         }
 
-
-                    // Thêm search trong category name
-                    { category: { name: { contains: searchTerm, mode: "insensitive" } } }
-                ],
-            };
-        } else {
-            // Khi không có search term (vector search), giới hạn số lượng
-            console.log(`[INTERNAL] No search term, returning limited products for vector search`);
-        }
-
-        // ISSUE: take: 10 quá ít cho vector search
-        const limit = searchTerm ? 10 : 50; // Vector search cần nhiều products hơn
-
-main
         const products = await prisma.product.findMany({
             where: whereCondition,
             select: {
                 productId: true,
                 name: true,
                 description: true,
- DUCNE
-
                 thumbnail: true,
-main
                 category: {
                     select: {
                         name: true,
@@ -63,26 +42,17 @@ main
                         stockQuantity: true,
                         color: true,
                         version: true,
- DUCNE
-
                         image: true,
- main
                     },
                     orderBy: { price: "asc" },
                     take: 1,
                 },
             },
- DUCNE
-            take: 10,
-        });
-
-
             take: limit,
         });
 
         console.log(`[INTERNAL] Found ${products.length} products`);
 
- main
         const formattedProducts = products
             .filter((p) => p.options && p.options.length > 0)
             .map((product) => {
@@ -93,14 +63,10 @@ main
                     name: product.name,
                     description: product.description,
                     category: product.category.name,
- DUCNE
-                    price: price,
-
                     thumbnail: option.image || product.thumbnail,
                     price: option.price,
                     salePrice: option.salePrice,
-                    minPrice: price, // giá thấp nhất (salePrice nếu có, không thì price)
- main
+                    minPrice: price,
                     stockQuantity: option.stockQuantity,
                     inStock: option.stockQuantity > 0,
                 };

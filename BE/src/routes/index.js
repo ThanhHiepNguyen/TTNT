@@ -9,7 +9,7 @@ import paymentRouter from "./paymentRoute.js";
 import chatRouter from "./chatRoute.js";
 import { sendResponse } from "../utils/response.js";
 import chatAnalyticsRouter from "./chatAnalyticsRoute.js";
- main
+import internalRouter from "./internalRoute.js";
 
 const router = Router();
 
@@ -37,9 +37,6 @@ router.use("/reviews", reviewRouter);
 router.use("/payment", paymentRouter);
 router.use("/chat", chatRouter);
 router.use("/admin", chatAnalyticsRouter);
-main
-
-import internalRouter from "./internalRoute.js";
 router.use("/internal", internalRouter);
 
 export default router;

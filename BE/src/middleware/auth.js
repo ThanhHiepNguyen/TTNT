@@ -37,7 +37,6 @@ export const authMiddleware = async (req, res, next) => {
     return sendResponse(res, 401, "Token không hợp lệ");
   }
 };
- DUCNE
 
 
 export const optionalAuthMiddleware = async (req, _res, next) => {
@@ -64,4 +63,3 @@ export const optionalAuthMiddleware = async (req, _res, next) => {
     return next();
   }
 };
- main

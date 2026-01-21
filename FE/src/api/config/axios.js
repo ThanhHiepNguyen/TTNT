@@ -20,8 +20,6 @@ axiosInstance.interceptors.request.use(
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
         }
- DUCNE
-
         const chatSessionIdKey = "chatSessionId";
         let sid = localStorage.getItem(chatSessionIdKey);
         if (!sid) {
@@ -29,7 +27,6 @@ axiosInstance.interceptors.request.use(
             localStorage.setItem(chatSessionIdKey, sid);
         }
         config.headers["x-session-id"] = sid;
- main
         return config;
     },
     (error) => {

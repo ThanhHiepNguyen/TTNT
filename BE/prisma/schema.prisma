@@ -197,9 +197,6 @@ model Review {
   
   product   Product  @relation(fields: [productId], references: [productId])
   user      User     @relation(fields: [userId], references: [userId])
- DUCNE
-}
-
 }
 
 enum ChatRole {
@@ -239,4 +236,3 @@ model ChatMessage {
   @@index([createdAt])
   @@index([role])
 }
- main

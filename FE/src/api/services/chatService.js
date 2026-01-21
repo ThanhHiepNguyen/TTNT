@@ -1,17 +1,6 @@
 import axiosInstance from "../config/axios.js";
 
 export const chatService = {
- DUCNE
-
-  sendMessage: (message, conversationHistory = []) => {
-    return axiosInstance
-      .post("/chat", {
-        message,
-        conversationHistory,
-      })
-      .then((res) => res || {});
-  },
-
   // Tạo 1 cuộc hội thoại mới
   createConversation: () => axiosInstance.post("/chat/conversations"),
 
@@ -38,6 +27,5 @@ export const chatService = {
   // Admin analytics
   getChatAnalytics: (days = 7) =>
     axiosInstance.get(`/admin/chat-analytics?days=${days}`),
- main
 };
 
