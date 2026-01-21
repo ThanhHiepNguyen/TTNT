@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -463,6 +462,22 @@ async def chat(request: ChatRequest):
         print(f"[CHAT] Using model: {GEMINI_MODEL}")
         print(f"[RAG] Starting RAG pipeline for: \"{request.message}\"")
 
+        # =========================================================
+        # [MỚI 1] CHÈN LOGIC XEM GIỎ HÀNG VÀO ĐẦU HÀM
+        # =========================================================
+        msg_lower = request.message.lower().strip()
+        if "giỏ" in msg_lower and ("xem" in msg_lower or "hiện" in msg_lower or "kiểm tra" in msg_lower or "của tôi" in msg_lower):
+            return ChatResponse(
+                success=True,
+                message="OK",
+                data={
+                    "response": "Đây là các sản phẩm trong giỏ hàng của bạn:",
+                    "products": [],
+                    "type": "view_cart" # Tín hiệu để Frontend hiện giỏ hàng
+                }
+            )
+        # =========================================================
+
         # 1. Lấy context từ RAG sớm để kiểm tra xem có thông tin chính sách (PDF) không
         rag_context = await retrieve_context(request.message, backend_url)
         formatted_context = format_rag_context(rag_context)
@@ -478,6 +493,8 @@ async def chat(request: ChatRequest):
         has_unavailable_brand_request = any(brand in request.message.lower() for brand in brands_not_in_system)
 
         # 3. Logic xử lý: Chỉ hỏi lại thông tin mua sắm NẾU không tìm thấy chính sách liên quan trong PDF
+        # [MỚI 3] Thêm điều kiện `and not has_policies` và `and "chính sách" not in msg_lower` 
+        # để tránh việc hỏi "chính sách bảo hành" bị bắt vào đây.
         if is_purchase_intent and phone_model and not price_condition and not price_value and not has_policies:
             print(f"[PURCHASE] Brand '{phone_model}' detected, no price info, and NO policies found - asking for price")
 
@@ -511,7 +528,8 @@ async def chat(request: ChatRequest):
             pass
 
         # Mua chung chung nhưng KHÔNG có chính sách nào khớp: Hỏi lại brand/giá
-        elif is_purchase_intent and not phone_model and not price_value and not has_policies:
+        # [MỚI] Thêm check `and "chính sách" not in msg_lower` để sửa lỗi.
+        elif is_purchase_intent and not phone_model and not price_value and not has_policies and "chính sách" not in msg_lower and "bảo hành" not in msg_lower:
             print("[PURCHASE] Generic purchase intent but NO policies found")
             response_text = t(
                 lang,
@@ -726,16 +744,38 @@ async def chat(request: ChatRequest):
                 except Exception:
                     return None
 
-            for p in raw_products:
-                if not p:
-                    continue
-                normalized_price = to_int_price(p.get("salePrice") or p.get("price") or p.get("minPrice"))
+            # [MỚI 2] XỬ LÝ SẢN PHẨM: Lấy Option ID để sửa lỗi 0đ
+            for p in raw_products[:15]: 
+                if not p: continue
+                
+                # 1. Lấy Product ID
+                p_id = p.get("productId") or p.get("_id") or p.get("id")
+                
+                # 2. Lấy Option ID (Code thêm vào)
+                option_id = None
+                opts = p.get("options") or p.get("variants") or []
+                if isinstance(opts, list) and len(opts) > 0:
+                    first_opt = opts[0]
+                    option_id = first_opt.get("_id") or first_opt.get("id") or first_opt.get("optionId")
+
+                # 3. Xử lý giá tiền
+                try:
+                    raw_price = p.get("salePrice") or p.get("price") or p.get("minPrice") or 0
+                    if isinstance(raw_price, str):
+                        normalized_price = int(float(raw_price.replace(",", "").replace(".", "")))
+                    else:
+                        normalized_price = int(raw_price)
+                except:
+                    normalized_price = 0
+
+                # 4. Thêm vào danh sách trả về
                 products.append({
-                    "productId": p.get("productId"),
+                    "productId": str(p_id), 
+                    "optionId": str(option_id) if option_id else None, # Gửi kèm optionId
                     "name": p.get("name"),
                     "price": normalized_price,
-                    "thumbnail": p.get("cheapestOptionImage") or p.get("thumbnail") or p.get("image"),
-                    "stockQuantity": p.get("stockQuantity"),
+                    "thumbnail": p.get("cheapestOptionImage") or p.get("thumbnail") or p.get("image") or "https://via.placeholder.com/150",
+                    "stockQuantity": p.get("stockQuantity", 0),
                 })
         except Exception as e:
             print(f"[CHAT] Error normalizing products for cards: {e}")
@@ -772,6 +812,8 @@ async def chat(request: ChatRequest):
                 if lang == "vi"
                 else brand_prompts_en.get(phone_model.lower(), fallback_en)
             )   
+        
+
             return ChatResponse(
                 success=True,
                 message=t(lang, "Cần thêm thông tin giá để tư vấn", "Need more information about price to advise"),
@@ -803,9 +845,9 @@ async def chat(request: ChatRequest):
         else:
             # Logic xử lý response đồng bộ với products
 
-               # --- ĐOẠN TÍCH HỢP PDF ---
+            # --- ĐOẠN TÍCH HỢP PDF ---
             # Kiểm tra xem có dữ liệu chính sách từ RAG không
-            has_policies = rag_context.get("policies") if rag_context else None
+            # has_policies = rag_context.get("policies") if rag_context else None # <-- Đã check ở trên
 
             if products:
                 # Luôn tạo response text dựa trên products thực tế để đảm bảo đồng bộ
@@ -829,71 +871,61 @@ async def chat(request: ChatRequest):
                 # Tạo response text dựa trên products thực tế
                 brand_text = detected_brand or "điện thoại"
                 brand_text_display = format_brand_display(brand_text)
-                lines = [t(lang,
-                    "Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.\n",
-                    "Hello! I'm Phonify's AI assistant. Happy to help you.\n"
-                )]
-                if len(products) == 1:
-                    lines.append(t(lang,
-                        f"Tôi tìm thấy 1 sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
-                        f"I found 1 {brand_text_display}{price_desc} product that matches your request:"
-                    ))
+                
+                # Nếu AI đã trả lời (từ Gemini) và có vẻ hợp lý thì dùng, nếu không thì dùng template
+                if "tìm thấy" not in cleaned_text.lower():
+                     lines = [t(lang,
+                        "Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.\n",
+                        "Hello! I'm Phonify's AI assistant. Happy to help you.\n"
+                    )]
+                     if len(products) == 1:
+                        lines.append(t(lang,
+                            f"Tôi tìm thấy 1 sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
+                            f"I found 1 {brand_text_display}{price_desc} product that matches your request:"
+                        ))
+                     else:
+                        lines.append(t(lang,
+                            f"Tôi tìm thấy {len(products)} sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
+                            f"I found {len(products)} {brand_text_display}{price_desc} products that match your request:"
+                        ))
+                     response_text = "\n".join(lines)
                 else:
-                    lines.append(t(lang,
-                        f"Tôi tìm thấy {len(products)} sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
-                        f"I found {len(products)} {brand_text_display}{price_desc} products that match your request:"
-                    ))
+                     response_text = cleaned_text # Dùng lời của Gemini nếu nó đã tìm thấy
 
-                # Thêm thông tin sản phẩm chính
-                main_product = products[0]
-                name = main_product.get("name") or "Sản phẩm"
-                price_val = main_product.get("price")
-                price_text = f"{int(price_val):,} VNĐ" if isinstance(price_val, (int, float)) else "Chưa có giá"
-
-                lines.append(t(lang,
-                    "\nThông tin chi tiết về sản phẩm phù hợp nhất:",
-                    "\nDetails of the most relevant product:"
-                ))
-                lines.append(t(lang, f"Tên sản phẩm: {name}", f"Product name: {name}"))
-                lines.append(t(lang, f"Giá: {price_text}", f"Price: {price_text}"))
-
-
-                if len(products) > 1:
-                    lines.append(t(lang,
-                        f"\nNgoài ra, chúng tôi còn có thêm {len(products)-1} lựa chọn khác:",
-                        f"\nAdditionally, we have {len(products)-1} more options:"
-                    ))
-                    for idx, p in enumerate(products[1:], 1):
-                        name = p.get("name") or "Sản phẩm"
-                        price_val = p.get("price")
-                        price_text = f"{int(price_val):,} VNĐ" if isinstance(price_val, (int, float)) else "Chưa có giá"
-                        lines.append(t(lang, f"{idx}. {name} - {price_text}", f"{idx}. {name} - {price_text}"))
-
-                lines.append(t(lang,
-                    f"\nBạn quan tâm đến sản phẩm nào ạ?\n\nSản phẩm gợi ý:",
-                    f"\nWhich product are you interested in?\n\nRecommended products:"
-                ))
-                response_text = "\n".join(lines)
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
-            # LOGIC QUAN TRỌNG: Nếu có Chính sách (PDF) nhưng không có sản phẩm
+            
+            # [LOGIC QUAN TRỌNG ĐỂ TRẢ LỜI CHÍNH SÁCH]
             elif has_policies:
                 print(f"[CHAT] No products but found policies. Using Gemini's text response.")
                 response_text = cleaned_text
                 response_type = "text"
+            
             else:
-                # Không có products: KHÔNG dùng LLM response để tránh trả thông tin không đồng bộ
-                price_desc = ""
-                if price_condition and price_value:
-                    price_desc = format_price_desc(price_condition, price_value, with_prefix=False)
+                # Không có products, không có chính sách
+                # Nếu không phải hỏi mua hàng (ví dụ chào hỏi), trả lời bằng text Gemini
+                if not is_purchase_intent:
+                     response_text = cleaned_text
+                     response_type = "text"
+                else:
+                    # Nếu là hỏi mua hàng mà không thấy
+                    price_desc = ""
+                    if price_condition and price_value:
+                        price_desc = format_price_desc(price_condition, price_value, with_prefix=False)
 
-                brand_text = format_brand_display(phone_model) if phone_model else "điện thoại"
-                response_text = (
-                    f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} phù hợp trong hệ thống để gợi ý. "
-                    "Bạn có thể cung cấp thêm ngân sách hoặc thử từ khóa khác, hoặc liên hệ CSKH để được hỗ trợ nhanh nhất."
-                )
-                response_type = "text"
-                print("[CHAT] Using safe fallback response (no products found)")
+                    brand_text = format_brand_display(phone_model) if phone_model else "điện thoại"
+                    response_text = (
+                        f"Hiện tại tôi chưa tìm thấy sản phẩm {brand_text}{price_desc} phù hợp trong hệ thống để gợi ý. "
+                        "Bạn có thể cung cấp thêm ngân sách hoặc thử từ khóa khác, hoặc liên hệ CSKH để được hỗ trợ nhanh nhất."
+                    )
+                    response_type = "text"
+                    print("[CHAT] Using safe fallback response (no products found)")
+
+        if products:
+            response_type = "products" # <-- Bắt buộc phải là "products"
+            # Nếu AI chưa nói câu mời chào thì thêm vào
+            if "tìm thấy" not in response_text.lower() and "dưới đây" not in response_text.lower():
+                response_text = "Dưới đây là các sản phẩm mình tìm được:\n" + response_text
 
         return ChatResponse(
             success=True,
@@ -933,5 +965,3 @@ async def chat(request: ChatRequest):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=AI_SERVICE_PORT)
-
-
