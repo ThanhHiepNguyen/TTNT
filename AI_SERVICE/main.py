@@ -82,19 +82,23 @@ Always respond concisely, clearly, and friendly, prioritizing data accuracy over
 
 def detect_lang(text: str) -> str:
     t = (text or "").lower()
-    # Vietnamese characters
+    score_vi = 0
+    score_en = 0
     vi_chars = re.compile(r"[ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ]", re.I)
     if vi_chars.search(t):
-        return "vi"
-    # Vietnamese keywords
-    vi_keywords = re.compile(
-        r"\b(tu van|tuvan|goi y|gia|trieu|nghin|vnd|dong|dien thoai|"
-        r"tai nghe|laptop|man hinh|pin|camera|bao hanh|doi tra|khuyen mai|mua|san pham)\b",
-        re.I
-    )
-    if vi_keywords.search(t):
-        return "vi"
-    return "en"
+        score_vi += 3
+    vi_kw = r"\b(tư vấn|tu van|gợi ý|goi y|giá|gia|mua|khuyến mãi|khuyen mai|sản phẩm|san pham|điện thoại|dien thoai|bao hanh|bảo hành)\b"
+    en_kw = r"\b(buy|price|recommend|best|phone|specs|order|discount|sale|how to|which|recommendation)\b"
+
+    if re.search(vi_kw, t, re.I):
+        score_vi += 2
+    if re.search(en_kw, t, re.I):
+        score_en += 2
+    if re.search(r"\b(iphone|samsung|pixel|xiaomi|oppo|vivo|realme|poco)\b", t, re.I):
+        score_en += 1
+        score_vi += 1
+    return "vi" if score_vi >= score_en else "en"
+
 def t(lang: str, vi: str, en: str) -> str:
     return vi if lang == "vi" else en
 
@@ -173,30 +177,16 @@ def build_history(conversation_history: List[Message]) -> List[dict]:
         return []
     
     filtered = []
-    found_first_user = False
-    
     for msg in conversation_history:
-        if not msg or not msg.content or not msg.content.strip():
+        content = getattr(msg, "content", None)
+        if not content or not str(content).strip():
             continue
         
-        role = "user" if msg.role == "user" else "model"
-        
-        if not found_first_user:
-            if role == "user":
-                found_first_user = True
-                filtered.append({
-                    "role": "user",
-                    "parts": [{"text": msg.content.strip()}]
-                })
-            continue
-        
+        role = "user" if getattr(msg, "role", "").lower() == "user" else "model"
         filtered.append({
             "role": role,
-            "parts": [{"text": msg.content.strip()}]
+            "parts": [{"text": str(content).strip()}]
         })
-    
-    if not filtered or filtered[0]["role"] != "user":
-        return []
     
     return filtered
 

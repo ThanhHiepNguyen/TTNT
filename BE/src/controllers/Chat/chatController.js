@@ -97,14 +97,17 @@ export const chat = async (req, res) => {
       });
     }
 
-    // history từ DB (đưa cho AI)
-    const lastMessages = await prisma.chatMessage.findMany({
-      where: { conversationId },
-      orderBy: { createdAt: "desc" },
-      take: 12,
-      select: { role: true, content: true },
-    });
-    const history = lastMessages.reverse().map((m) => ({ role: m.role, content: m.content }));
+     // history từ DB (đưa cho AI)
+  const lastMessages = await prisma.chatMessage.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: "asc" },   
+    take: 12,
+    select: { role: true, content: true },
+  });
+  const history = lastMessages.map((m) => ({
+    role: m.role === "user" ? "user" : "model",
+    parts: [{ text: m.content }]
+  }));
 
     // heuristic mơ hồ
     const hasBudget = /(\d+\s*(tr|triệu|m|k|nghìn|đ|vnd)\b|\$\s*\d+(\.\d+)?|\b\d+(\.\d+)?\s*(usd|dollars?)\b|\bunder\s*\$?\s*\d+(\.\d+)?\b|\bbelow\s*\$?\s*\d+(\.\d+)?\b)/i.test(text);
