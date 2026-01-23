@@ -185,6 +185,11 @@ const ChatBox = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showQuickReplies, setShowQuickReplies] = useState(true);
 
+  // ---  Xử lý ảnh ---
+  const [selectedImage, setSelectedImage] = useState(null); // Lưu base64 ảnh
+  const fileInputRef = useRef(null); // Ref cho input file ẩn
+ 
+
   const [showHistory, setShowHistory] = useState(false);
   const [activePanel, setActivePanel] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -197,6 +202,28 @@ const ChatBox = () => {
 
   const scrollToBottom = () => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   useEffect(() => { if (isOpen) scrollToBottom(); }, [messages, isOpen]);
+
+  // --- START NEW CODE: Hàm xử lý chọn file ảnh ---
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      // Giới hạn 5MB
+      if (file.size > 5 * 1024 * 1024) {
+        alert("Ảnh quá lớn, vui lòng chọn ảnh dưới 5MB");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedImage(reader.result);
+        // Tự động focus vào ô nhập để user gõ thêm text nếu muốn
+        inputRef.current?.focus();
+      };
+      reader.readAsDataURL(file);
+    }
+    // Reset value để có thể chọn lại cùng 1 file nếu lỡ xóa
+    e.target.value = null;
+  };
+  
 
   // Hàm thêm vào giỏ hàng
   const handleQuickAdd = async (product) => {
@@ -220,17 +247,33 @@ const ChatBox = () => {
 
   const sendText = async (text) => {
     const userMsg = text || inputMessage.trim();
-    if (!userMsg || isLoading) return;
+    // [EDIT]: Cho phép gửi nếu có text HOẶC có ảnh
+    if ((!userMsg && !selectedImage) || isLoading) return;
 
     setShowQuickReplies(false);
     setActivePanel(null);
-    setMessages(prev => [...prev, { role: "user", content: userMsg }]);
+
+    // [EDIT]: Lưu lại ảnh để gửi và clear state
+    const imageToSend = selectedImage;
+    setSelectedImage(null);
+
+    // [EDIT]: Thêm ảnh vào object tin nhắn để hiển thị local
+    const newMsg = {
+        role: "user",
+        content: userMsg,
+        image: imageToSend // Lưu ảnh base64 để hiển thị
+    };
+
+    setMessages(prev => [...prev, newMsg]);
     setInputMessage("");
     setIsLoading(true);
 
     try {
       const cid = await ensureConversationId();
-      const res = await chatService.sendMessage(cid, userMsg, langMode === "auto" ? null : langMode);
+      
+      // [QUAN TRỌNG]: Gửi thêm imageToSend vào hàm sendMessage
+      // Lưu ý: Bạn cần chắc chắn file chatService.js đã update hàm sendMessage để nhận tham số thứ 4 là image
+      const res = await chatService.sendMessage(cid, userMsg, langMode === "auto" ? null : langMode, imageToSend);
 
       setMessages(prev => [
         ...prev,
@@ -269,7 +312,7 @@ const ChatBox = () => {
       }
       return;
     }
-    // Nếu đang mở rồi -> đóng cả legacy state và activePanel
+   
     setShowHistory(false);
     setActivePanel(null);
   };
@@ -288,7 +331,8 @@ const ChatBox = () => {
         role: (m.role === "user") ? "user" : "assistant",
         content: m.content,
         type: m.type,
-        products: m.products || []
+        products: m.products || [],
+        image: m.image || null // Load lại ảnh lịch sử nếu có
       }));
 
       setMessages(normalized);
@@ -305,8 +349,6 @@ const ChatBox = () => {
       setHistoryLoading(false);
     }
   };
-
-
 
   const lastAiMessage = messages[messages.length - 1]?.role === "assistant" ? messages[messages.length - 1].content : null;
 
@@ -338,7 +380,7 @@ const ChatBox = () => {
                 💡
               </button>
 
-              {/* Lịch sử (vẫn dùng toggleHistory để giữ behavior cũ) */}
+              {/* Lịch sử */}
               <button
                 onClick={toggleHistory}
                 className="opacity-80 hover:opacity-100 transition"
@@ -357,7 +399,6 @@ const ChatBox = () => {
               </button>
               <button
                 onClick={() => {
-                  // vòng: auto -> vi -> en -> auto
                   const next = langMode === "auto" ? "vi" : langMode === "vi" ? "en" : "auto";
                   setLangMode(next);
                   localStorage.setItem("chatLangMode", next);
@@ -414,7 +455,6 @@ const ChatBox = () => {
                       </button>
                     );
                   })
-
                 )}
               </div>
             )}
@@ -434,14 +474,14 @@ const ChatBox = () => {
               </div>
             )}
 
-            {/* --- NEW CHAT PANEL --- */}
+            
             {activePanel === "new" && (
               <div className="p-3 text-center text-gray-500 text-sm rounded-md bg-white border">
                 Bắt đầu cuộc trò chuyện mới. Gõ nội dung và gửi.
               </div>
             )}
 
-            {/* --- FALLBACK: nếu không mở panel nào hiển thị quick replies + messages --- */}
+            
             {!activePanel && !showHistory && (
               <>
                 {showQuickReplies && (
@@ -457,6 +497,18 @@ const ChatBox = () => {
                 {messages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${msg.role === "user" ? "bg-blue-600 text-white" : "bg-white border text-gray-800 shadow-sm"}`}>
+                      
+                      
+                      {msg.image && (
+                         <div className="mb-2">
+                           <img 
+                             src={msg.image} 
+                             alt="Uploaded" 
+                             className="max-h-48 rounded-lg border border-blue-400 object-cover"
+                           />
+                         </div>
+                      )}
+
                       {msg.content && <p className="whitespace-pre-wrap mb-2">{msg.content}</p>}
 
                       {msg.products?.length > 0 && msg.type === "products" && (
@@ -490,25 +542,65 @@ const ChatBox = () => {
             )}
           </div>
 
-          {/* Footer */}
-          <form onSubmit={handleSendMessage} className="p-3 bg-white border-t rounded-b-2xl flex gap-2 items-center">
-            <input
-              ref={inputRef}
-              type="text"
-              className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
-              placeholder="Nhập tin nhắn..."
-              value={inputMessage}
-              onChange={e => setInputMessage(e.target.value)}
-              disabled={isLoading}
-            />
-            <VoiceChat onSendMessage={(txt) => sendText(txt)} aiResponse={lastAiMessage} />
-            <button
-              type="submit"
-              disabled={!inputMessage.trim() || isLoading}
-              className="bg-blue-600 text-white rounded-full w-10 h-10 flex items-center justify-center hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-sm"
-            >
-              ➤
-            </button>
+           <form onSubmit={handleSendMessage} className="p-3 bg-white border-t rounded-b-2xl flex flex-col gap-2">
+             
+            
+             {selectedImage && (
+                <div className="relative w-fit ml-10">
+                    <img src={selectedImage} alt="Preview" className="h-16 w-16 object-cover rounded-lg border border-blue-200 shadow-sm" />
+                    <button 
+                        type="button"
+                        onClick={() => {setSelectedImage(null); fileInputRef.current.value = null;}}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-md hover:bg-red-600 transition"
+                        title="Xóa ảnh"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+
+            <div className="flex gap-2 items-center w-full">
+              
+              <input 
+                  type="file" 
+                  ref={fileInputRef}
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleFileSelect}
+              />
+              
+             
+              <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-gray-500 hover:text-blue-600 p-2 transition rounded-full hover:bg-gray-100"
+                  title="Gửi ảnh"
+                  disabled={isLoading}
+              >
+                  {/* Icon Image */}
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+              </button>
+
+              <input
+                ref={inputRef}
+                type="text"
+                className="flex-1 border border-gray-300 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition"
+                placeholder={selectedImage ? "Thêm câu hỏi về ảnh..." : "Nhập tin nhắn..."}
+                value={inputMessage}
+                onChange={e => setInputMessage(e.target.value)}
+                disabled={isLoading}
+              />
+              <VoiceChat onSendMessage={(txt) => sendText(txt)} aiResponse={lastAiMessage} />
+              <button
+                type="submit"
+                disabled={(!inputMessage.trim() && !selectedImage) || isLoading}
+                className="bg-blue-600 text-white rounded-full w-10 h-10 flex items-center justify-center hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-sm"
+              >
+                ➤
+              </button>
+            </div>
           </form>
         </div>
       )}
