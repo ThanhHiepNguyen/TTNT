@@ -11,10 +11,16 @@ export const chatService = {
   getMessages: (conversationId) =>
     axiosInstance.get(`/chat/conversations/${conversationId}/messages`),
 
-  // Gửi message theo conversationId
-  sendMessage: (conversationId, message, language) => {
-    const payload = { conversationId, message };
+  
+  sendMessage: (conversationId, message, language, image) => {
+    const payload = { 
+        conversationId, 
+        message: message || "", 
+        image: image || null    
+    };
+    
     if (language) payload.language = language;
+    
     return axiosInstance.post("/chat", payload);
   },
 
@@ -28,4 +34,3 @@ export const chatService = {
   getChatAnalytics: (days = 7) =>
     axiosInstance.get(`/admin/chat-analytics?days=${days}`),
 };
-
