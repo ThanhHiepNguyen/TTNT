@@ -3,7 +3,9 @@ import os
 import httpx
 from typing import List, Dict, Optional
 import google.generativeai as genai
-
+import PIL.Image
+import io
+import base64
 """
 RAG Service - Retrieval-Augmented Generation cho Phonify AI Chat
 
@@ -827,3 +829,55 @@ def format_rag_context(context: Dict) -> str:
 
 # Gọi nạp PDF ngay khi khởi động app
 load_policies_from_pdfs()
+
+
+# rag_service.py
+
+# ... (các import cũ giữ nguyên)
+
+async def identify_phone_from_image(image_bytes: bytes) -> str:
+    """
+    Sử dụng Gemini Vision để nhận diện tên điện thoại từ hình ảnh.
+    Có cơ chế tự động thử model khác nếu model mặc định lỗi.
+    """
+    print("[VISION] Analyzing image...")
+    
+    # Danh sách các model vision để thử lần lượt (ưu tiên Flash vì nhanh/rẻ)
+    candidate_models = [
+        'gemini-2.5-flash', 
+        'gemini-2.0-flash-lite' 
+        
+    ]
+
+    image = None
+    try:
+        image = PIL.Image.open(io.BytesIO(image_bytes))
+    except Exception as e:
+        print(f"[VISION] Lỗi đọc ảnh: {e}")
+        return ""
+
+    prompt = """
+    Hãy nhìn vào hình ảnh này và xác định chính xác đây là điện thoại gì.
+    Chỉ cần nói tên điện thoại (Hãng + Model + Màu).
+    Ví dụ: "iPhone 15 Pro Max Titanium".
+    Không giải thích thêm.
+    """
+
+    for model_name in candidate_models:
+        try:
+            print(f"[VISION] Trying model: {model_name}...")
+            model = genai.GenerativeModel(model_name)
+            response = model.generate_content([prompt, image])
+            
+            if response and response.text:
+                result = response.text.strip()
+                print(f"[VISION] Success with {model_name}: {result}")
+                return result
+                
+        except Exception as e:
+            # Nếu lỗi "Not Found" hoặc lỗi khác, thử model tiếp theo
+            print(f"[VISION] Failed with {model_name}: {str(e)}")
+            continue
+
+    print("[VISION] All models failed to analyze the image.")
+    return ""
