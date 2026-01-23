@@ -64,12 +64,16 @@ export const chat = async (req, res) => {
       return sendResponse(res, 400, "Thiếu sessionId (x-session-id) hoặc chưa đăng nhập");
     }
 
-    const { message, conversationId, language } = req.body;
+    // [CẬP NHẬT] Lấy thêm trường image từ body
+    const { message, conversationId, language, image } = req.body;
 
     if (!conversationId) return sendResponse(res, 400, "Thiếu conversationId");
 
     const raw = (message || "").trim();
-    if (!raw) return sendResponse(res, 400, "Vui lòng nhập tin nhắn");
+    
+    // [CẬP NHẬT] Kiểm tra: Nếu không có message VÀ không có image thì mới báo lỗi
+    // (Code cũ chỉ check raw)
+    if (!raw && !image) return sendResponse(res, 400, "Vui lòng nhập tin nhắn hoặc gửi ảnh");
 
     const lang = normalizeLang(language) || detectLang(raw);
     const text = raw.toLowerCase();
@@ -90,24 +94,24 @@ export const chat = async (req, res) => {
 
     // set title lần đầu
     if (!convo.title || convo.title === "Chat mới") {
-      const title = raw.length > 40 ? raw.slice(0, 40) + "…" : raw;
+      // [CẬP NHẬT] Nếu chỉ có ảnh thì đặt title là "Hình ảnh"
+      const titleText = raw || (image ? "Hình ảnh sản phẩm" : "Chat mới");
+      const title = titleText.length > 40 ? titleText.slice(0, 40) + "…" : titleText;
+      
       await prisma.chatConversation.update({
         where: { conversationId },
         data: { title },
       });
     }
 
-     // history từ DB (đưa cho AI)
-  const lastMessages = await prisma.chatMessage.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: "asc" },   
-    take: 12,
-    select: { role: true, content: true },
-  });
-  const history = lastMessages.map((m) => ({
-    role: m.role === "user" ? "user" : "model",
-    parts: [{ text: m.content }]
-  }));
+    // history từ DB (đưa cho AI)
+    const lastMessages = await prisma.chatMessage.findMany({
+      where: { conversationId },
+      orderBy: { createdAt: "desc" },
+      take: 12,
+      select: { role: true, content: true },
+    });
+    const history = lastMessages.reverse().map((m) => ({ role: m.role, content: m.content }));
 
     // heuristic mơ hồ
     const hasBudget = /(\d+\s*(tr|triệu|m|k|nghìn|đ|vnd)\b|\$\s*\d+(\.\d+)?|\b\d+(\.\d+)?\s*(usd|dollars?)\b|\bunder\s*\$?\s*\d+(\.\d+)?\b|\bbelow\s*\$?\s*\d+(\.\d+)?\b)/i.test(text);
@@ -119,11 +123,14 @@ export const chat = async (req, res) => {
     const isOnlyAck = /^(ok|oke|ừ|uh|hmm|dạ|yes|no|thanks|thank you)\W*$/i.test(text);
     const isAskingRecommend = /(tư vấn|tu van|tuvan|gợi ý|goi y|recommend|suggest|choose|chọn giúp|chon giup|mua gì|mua gi)/i.test(text);
 
-    const isAmbiguous =
+    // [CẬP NHẬT] Nếu có ảnh (image) thì KHÔNG coi là mơ hồ (isAmbiguous = false)
+    // Code cũ: const isAmbiguous = isOnlyAck || ...
+    const isAmbiguous = !image && (
       isOnlyAck ||
       (isAskingRecommend && !hasCategoryOrModel) ||
       (isAskingRecommend && hasCategoryOrModel && !hasBudget && !hasNeed) ||
-      (text.length < 12 && !hasBudget && !hasCategoryOrModel && !hasNeed);
+      (text.length < 12 && !hasBudget && !hasCategoryOrModel && !hasNeed)
+    );
 
     const clarifyCount = await prisma.chatMessage.count({
       where: { conversationId, role: "assistant", intent: "clarify" },
@@ -176,20 +183,29 @@ export const chat = async (req, res) => {
       });
       return sendResponse(res, 200, "OK", { response: reply, products: [], type: "text" });
     }
+    
     // lưu user message bình thường
     const intentHint = detectIntentHint(raw);
+    
+    // [CẬP NHẬT] Nếu có ảnh mà không có text, lưu content mặc định để hiển thị trong DB
+    // Code cũ: content: raw
+    const contentToSave = raw || (image ? "[Người dùng đã gửi một ảnh]" : "");
+
     await prisma.chatMessage.create({
       data: {
         conversationId,
         role: "user",
-        content: raw,
+        content: contentToSave, // Dùng biến mới đã xử lý
         language: lang || null,
         isAmbiguous: false,
         intent: intentHint,
       },
     });
+
     // gọi AI service: trả object { response, products, type, ... }
-    const aiData = await generateChatResponse(raw, history, lang);
+    // [CẬP NHẬT] Truyền thêm image vào service
+    // Code cũ: const aiData = await generateChatResponse(raw, history, lang);
+    const aiData = await generateChatResponse(raw, history, lang, image);
 
     await prisma.chatMessage.create({
       data: {
@@ -223,4 +239,3 @@ export const chat = async (req, res) => {
     return sendResponse(res, 503, "AI service error", { response: friendly, products: [], type: "text" });
   }
 };
-
