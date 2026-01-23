@@ -14,6 +14,7 @@ if sys.platform == 'win32':
 
 import os
 import re
+import base64 # [THÊM] Import thư viện base64 để xử lý ảnh
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -21,7 +22,8 @@ import google.generativeai as genai
 from rag_service import (
     retrieve_context,
     format_rag_context,
-    get_products_from_backend
+    get_products_from_backend,
+    identify_phone_from_image
 )
 
 load_dotenv()
@@ -165,6 +167,7 @@ class ChatRequest(BaseModel):
     backendUrl: Optional[str] = None
 
     language: Optional[str] = None  # "vi" | "en"
+    image: Optional[str] = None
 
 class ChatResponse(BaseModel):
     success: bool
@@ -437,8 +440,48 @@ async def health_check():
 @app.post("/api/v1/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     try:
-        if not request.message or not request.message.strip():
-            raise HTTPException(status_code=400, detail="Message không được để trống")
+        # LOGIC XỬ LÝ ẢNH MỚI
+        image_search_term = ""
+        user_intent_message = request.message
+        
+        if request.image:
+            try:
+                # 1. Decode Base64 thành bytes
+                if "base64," in request.image:
+                    image_data = request.image.split("base64,")[1]
+                else:
+                    image_data = request.image
+                    
+                image_bytes = base64.b64decode(image_data)
+                
+                # 2. Gọi Gemini Vision để nhận diện
+                detected_phone_name = await identify_phone_from_image(image_bytes)
+                
+                if detected_phone_name and "không" not in detected_phone_name.lower():
+                    # === [THAY ĐỔI QUAN TRỌNG: TRẢ VỀ NGAY LẬP TỨC] ===
+                    print(f"[CHAT] Image detected as: {detected_phone_name}. Returning immediately.")
+                    return ChatResponse(
+                        success=True,
+                        message="Nhận diện ảnh thành công",
+                        data={
+                            "response": detected_phone_name,
+                            "products": [],
+                            "type": "text"
+                        }
+                    )
+                    # ==================================================
+                else:
+                     print("[CHAT] Image uploaded but could not identify phone.")
+            except Exception as img_e:
+                print(f"[CHAT] Error processing image: {img_e}")
+                
+        # [SỬA]: Sử dụng user_intent_message thay vì request.message để dùng thông tin từ ảnh
+        if not user_intent_message or not user_intent_message.strip():
+            # Fallback nếu không có ảnh và không có text
+            if not request.message or not request.message.strip():
+                raise HTTPException(status_code=400, detail="Message không được để trống")
+            else:
+                 user_intent_message = request.message
         
         if not GEMINI_API_KEY:
             raise HTTPException(status_code=500, detail="GEMINI_API_KEY chưa được cấu hình")
@@ -447,15 +490,15 @@ async def chat(request: ChatRequest):
         
         lang = (request.language or "").strip().lower()
         if lang not in ("vi", "en"):
-            lang = detect_lang(request.message)
+            lang = detect_lang(user_intent_message) # [SỬA]: detect từ message đã gộp ảnh
 
         print(f"[CHAT] Using model: {GEMINI_MODEL}")
-        print(f"[RAG] Starting RAG pipeline for: \"{request.message}\"")
+        print(f"[RAG] Starting RAG pipeline for: \"{user_intent_message}\"") # [SỬA] Log đúng query
 
         # =========================================================
         # [MỚI 1] CHÈN LOGIC XEM GIỎ HÀNG VÀO ĐẦU HÀM
         # =========================================================
-        msg_lower = request.message.lower().strip()
+        msg_lower = request.message.lower().strip() # Logic giỏ hàng vẫn dùng tin nhắn gốc là OK
         if "giỏ" in msg_lower and ("xem" in msg_lower or "hiện" in msg_lower or "kiểm tra" in msg_lower or "của tôi" in msg_lower):
             return ChatResponse(
                 success=True,
@@ -469,18 +512,21 @@ async def chat(request: ChatRequest):
         # =========================================================
 
         # 1. Lấy context từ RAG sớm để kiểm tra xem có thông tin chính sách (PDF) không
-        rag_context = await retrieve_context(request.message, backend_url)
+        # [SỬA QUAN TRỌNG]: Dùng user_intent_message để RAG tìm đúng sản phẩm trong ảnh
+        rag_context = await retrieve_context(user_intent_message, backend_url)
         formatted_context = format_rag_context(rag_context)
         # Kiểm tra nhanh xem trong context có dữ liệu chính sách từ PDF không
         has_policies = rag_context.get("policies") and len(rag_context["policies"]) > 0
 
         # 2. Phân tích ý định mua điện thoại
-        is_purchase_intent, phone_model, price_condition, price_value = analyze_purchase_intent(request.message)
+        # [SỬA QUAN TRỌNG]: Dùng user_intent_message
+        is_purchase_intent, phone_model, price_condition, price_value = analyze_purchase_intent(user_intent_message)
         print(f"[CHAT] Analysis result: phone_model='{phone_model}', price_condition='{price_condition}', price_value='{price_value}'")
 
         # Kiểm tra nếu user hỏi brand cụ thể mà KHÔNG có trong hệ thống
         brands_not_in_system = ["oneplus", "nokia", "huawei", "motorola", "lg", "asus", "honor", "sony", "google", "pixel"]
-        has_unavailable_brand_request = any(brand in request.message.lower() for brand in brands_not_in_system)
+        # [SỬA]: Dùng user_intent_message
+        has_unavailable_brand_request = any(brand in user_intent_message.lower() for brand in brands_not_in_system)
 
         # 3. Logic xử lý: Chỉ hỏi lại thông tin mua sắm NẾU không tìm thấy chính sách liên quan trong PDF
         # [MỚI 3] Thêm điều kiện `and not has_policies` và `and "chính sách" not in msg_lower` 
@@ -557,7 +603,8 @@ async def chat(request: ChatRequest):
         
         chat_session = model.start_chat(history=history)
         
-        enhanced_message = request.message.strip()
+        # [SỬA]: Dùng user_intent_message
+        enhanced_message = user_intent_message.strip()
         if formatted_context:
             enhanced_message = f"{enhanced_message}{formatted_context}"
             print(f"[RAG] Context added ({len(formatted_context)} chars)")
@@ -864,23 +911,23 @@ async def chat(request: ChatRequest):
                 
                 # Nếu AI đã trả lời (từ Gemini) và có vẻ hợp lý thì dùng, nếu không thì dùng template
                 if "tìm thấy" not in cleaned_text.lower():
-                     lines = [t(lang,
+                      lines = [t(lang,
                         "Chào bạn, tôi là trợ lý AI từ Phonify, rất vui được hỗ trợ bạn.\n",
                         "Hello! I'm Phonify's AI assistant. Happy to help you.\n"
                     )]
-                     if len(products) == 1:
+                      if len(products) == 1:
                         lines.append(t(lang,
                             f"Tôi tìm thấy 1 sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
                             f"I found 1 {brand_text_display}{price_desc} product that matches your request:"
                         ))
-                     else:
+                      else:
                         lines.append(t(lang,
                             f"Tôi tìm thấy {len(products)} sản phẩm {brand_text_display}{price_desc} phù hợp với yêu cầu của bạn:",
                             f"I found {len(products)} {brand_text_display}{price_desc} products that match your request:"
                         ))
-                     response_text = "\n".join(lines)
+                      response_text = "\n".join(lines)
                 else:
-                     response_text = cleaned_text # Dùng lời của Gemini nếu nó đã tìm thấy
+                      response_text = cleaned_text # Dùng lời của Gemini nếu nó đã tìm thấy
 
                 response_type = "products"
                 print(f"[CHAT] Generated synchronized response with {len(products)} products")
@@ -895,8 +942,8 @@ async def chat(request: ChatRequest):
                 # Không có products, không có chính sách
                 # Nếu không phải hỏi mua hàng (ví dụ chào hỏi), trả lời bằng text Gemini
                 if not is_purchase_intent:
-                     response_text = cleaned_text
-                     response_type = "text"
+                      response_text = cleaned_text
+                      response_type = "text"
                 else:
                     # Nếu là hỏi mua hàng mà không thấy
                     price_desc = ""
