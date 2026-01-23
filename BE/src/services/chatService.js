@@ -3,7 +3,8 @@ import axios from "axios";
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://localhost:8001";
 const API_URL = process.env.API_URL || `http://localhost:${process.env.PORT || 8000}`;
 
-export const generateChatResponse = async (userMessage, conversationHistory = [], language = null) => {
+// [CẬP NHẬT] Thêm tham số image = null vào cuối hàm
+export const generateChatResponse = async (userMessage, conversationHistory = [], language = null, image = null) => {
     try {
         console.log(`[CHAT] Calling AI service at: ${AI_SERVICE_URL}/api/v1/chat`);
         console.log(`[CHAT] Backend URL: ${API_URL}`);
@@ -14,14 +15,15 @@ export const generateChatResponse = async (userMessage, conversationHistory = []
                 message: userMessage,
                 conversationHistory: conversationHistory,
                 backendUrl: API_URL,
-
                 language: language,
+               
+                image: image, 
             },
             {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                timeout: 120000, // 120s (2 phút) - đủ cho lần đầu load embedding model
+                timeout: 120000, 
             }
         );
 
