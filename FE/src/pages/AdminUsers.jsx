@@ -21,6 +21,7 @@ const AdminUsers = () => {
     role: "",
     isActive: "",
   });
+  const [searchInput, setSearchInput] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
   const [formData, setFormData] = useState({
@@ -31,6 +32,16 @@ const AdminUsers = () => {
     password: "",
     role: "STAFF",
   });
+
+  // Debounce search input
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setFilters((prev) => ({ ...prev, search: searchInput }));
+      setPagination((prev) => ({ ...prev, page: 1 }));
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [searchInput]);
 
   useEffect(() => {
     if (user?.role === "ADMIN") {
@@ -44,7 +55,7 @@ const AdminUsers = () => {
       const params = {
         page: pagination.page,
         limit: pagination.limit,
-        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.search && filters.search.trim().length >= 2 ? { search: filters.search.trim() } : {}),
         ...(filters.role ? { role: filters.role } : {}),
         ...(filters.isActive !== "" ? { isActive: filters.isActive === "true" } : {}),
       };
@@ -306,11 +317,10 @@ const AdminUsers = () => {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <input
             type="text"
-            placeholder="Tìm kiếm (email, phone, tên)..."
-            value={filters.search}
+            placeholder="Tìm kiếm (email, phone, tên)... (tối thiểu 2 ký tự)"
+            value={searchInput}
             onChange={(e) => {
-              setFilters((prev) => ({ ...prev, search: e.target.value }));
-              setPagination((prev) => ({ ...prev, page: 1 }));
+              setSearchInput(e.target.value);
             }}
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
@@ -380,8 +390,8 @@ const AdminUsers = () => {
                   <div className="flex flex-col items-end gap-3">
                     <div className="flex gap-2">
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${u.role === "ADMIN" ? "bg-purple-100 text-purple-800" :
-                          u.role === "STAFF" ? "bg-blue-100 text-blue-800" :
-                            "bg-gray-100 text-gray-800"
+                        u.role === "STAFF" ? "bg-blue-100 text-blue-800" :
+                          "bg-gray-100 text-gray-800"
                         }`}>
                         {u.role}
                       </span>

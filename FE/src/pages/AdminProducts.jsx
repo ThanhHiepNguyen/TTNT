@@ -22,10 +22,26 @@ const AdminProducts = () => {
     search: "",
     categoryId: "",
   });
+  const [searchInput, setSearchInput] = useState("");
 
   useEffect(() => {
     if (user?.role === "ADMIN") {
       fetchCategories();
+    }
+  }, [user]);
+
+  // Debounce search input
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setFilters((prev) => ({ ...prev, search: searchInput }));
+      setPagination((prev) => ({ ...prev, page: 1 }));
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timeoutId);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (user?.role === "ADMIN") {
       fetchProducts();
     }
   }, [user, pagination.page, filters]);
@@ -47,7 +63,7 @@ const AdminProducts = () => {
       const params = {
         page: pagination.page,
         limit: pagination.limit,
-        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.search && filters.search.trim().length >= 2 ? { search: filters.search.trim() } : {}),
         ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
       };
       const response = await productService.getAllProducts(params);
@@ -105,11 +121,10 @@ const AdminProducts = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <input
               type="text"
-              placeholder="Tìm kiếm sản phẩm..."
-              value={filters.search}
+              placeholder="Tìm kiếm sản phẩm... (tối thiểu 2 ký tự)"
+              value={searchInput}
               onChange={(e) => {
-                setFilters((prev) => ({ ...prev, search: e.target.value }));
-                setPagination((prev) => ({ ...prev, page: 1 }));
+                setSearchInput(e.target.value);
               }}
               className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
